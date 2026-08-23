@@ -1,0 +1,18 @@
+{
+  "groups" : [
+    {
+      "layers" : [
+        { "image-name" : "Glyph.png" },
+        { "image-name" : "Keycap.png" }
+      ]
+    },
+    {
+      "layers" : [
+        { "image-name" : "BackgroundDeep.png" }
+      ]
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [ "macOS" ]
+  }
+}
