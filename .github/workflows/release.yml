@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two pushes in quick succession must not race for the same tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Calculate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      tag: ${{ steps.semver.outputs.version_tag }}
+      changed: ${{ steps.semver.outputs.changed }}
+      is_tagged: ${{ steps.semver.outputs.is_tagged }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate semantic version
+        id: semver
+        uses: PaulHatch/semantic-version@6.0.3
+        with:
+          tag_prefix: "v"
+          major_pattern: "(MAJOR)"
+          minor_pattern: "(MINOR)"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+          search_commit_body: false
+          user_format_type: "csv"
+          enable_prerelease_mode: true
+          debug: false
+          bump_each_commit_patch_pattern: ""
+
+      - name: Report
+        env:
+          TAG: ${{ steps.semver.outputs.version_tag }}
+          PREVIOUS: ${{ steps.semver.outputs.previous_version }}
+          BUMP: ${{ steps.semver.outputs.version_type }}
+        run: echo "::notice::Next release is $TAG ($BUMP bump from $PREVIOUS)"
+
+  release:
+    name: Build and release
+    needs: version
+    # Nothing new to ship, or this commit already carries its release tag.
+    if: needs.version.outputs.changed == 'true' && needs.version.outputs.is_tagged != 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Test
+        run: make test
+
+      - name: Build app bundle
+        run: make app
+
+      - name: Stamp version into the bundle
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          plist=.build/Keyflip.app/Contents/Info.plist
+          plutil -replace CFBundleShortVersionString -string "$VERSION" "$plist"
+          plutil -replace CFBundleVersion -string "$BUILD" "$plist"
+          # Editing Info.plist invalidates the signature `make app` applied.
+          codesign --force --sign - --identifier local.Keyflip --timestamp=none \
+            .build/Keyflip.app
+
+      - name: Zip app bundle
+        id: package
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          zip="Keyflip-${TAG}.zip"
+          # ditto, not zip: it keeps the bundle's symlinks and metadata intact.
+          ditto -c -k --sequesterRsrc --keepParent .build/Keyflip.app "$zip"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the commit
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          ZIP: ${{ steps.package.outputs.zip }}
+        run: |
+          set -euo pipefail
+          cat > install-note.md <<'NOTE'
+          The app is ad-hoc signed and not notarized, so macOS refuses to open it
+          on first launch: right-click `Keyflip.app` and choose **Open**, or run
+          `xattr -dr com.apple.quarantine /Applications/Keyflip.app`.
+          NOTE
+          # --generate-notes appends GitHub's own changelog under the note above.
+          gh release create "$TAG" "$ZIP" \
+            --title "Keyflip $VERSION" \
+            --notes-file install-note.md \
+            --generate-notes \
+            --verify-tag
