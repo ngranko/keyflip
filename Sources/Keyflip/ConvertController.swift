@@ -179,7 +179,7 @@ final class ConvertController {
             DebugLog.event("replace confirmed after \(attempt) recheck(s)")
             rewriteInFlight = false
             done(true)
-        case .unknown:
+        case .unreadable:
             // The field will not read back. Assume the write landed rather
             // than retype over it — doubling is worse than not converting.
             DebugLog.event("replace unverifiable after \(attempt) recheck(s); assuming applied")
@@ -189,6 +189,25 @@ final class ConvertController {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.confirmInterval) { [weak self] in
                 self?.confirm(target, output: output, in: snapshot, attempt: attempt + 1, then: done)
             }
+        case .mangled where attempt < Self.confirmAttempts:
+            // Give it the same grace as `.unchanged`: an app part-way through
+            // applying the write reads back as neither text for a frame or two.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.confirmInterval) { [weak self] in
+                self?.confirm(target, output: output, in: snapshot, attempt: attempt + 1, then: done)
+            }
+        case .mangled(let value):
+            // Neither applied nor refused: the field is holding something that
+            // is neither what was there nor what we wrote. Hand it to the
+            // keystroke path, which types over the target only once the field
+            // confirms the original is still there, and backs out otherwise.
+            DebugLog.event(
+                "replace neither applied nor refused after \(attempt) recheck(s): " +
+                "\(DebugLog.quote(value)) → retype"
+            )
+            noteRefusal(snapshot.app)
+            let rewritten = retype(target, as: output, in: snapshot)
+            rewriteInFlight = false
+            done(rewritten)
         case .unchanged:
             DebugLog.event("replace did not land after \(attempt) recheck(s) → retype")
             noteRefusal(snapshot.app)

@@ -66,16 +66,27 @@ enum FieldAccess {
         // Browser fields often have AXSelectedText and no AXValue. Do not
         // clamp the write away against an empty value.
         if !snapshot.selectedText.isEmpty || nsRange.length > 0 {
+            // Writing AXSelectedText against a selection the field never took
+            // *inserts* instead of replacing, leaving the original sitting next
+            // to the conversion. A web input that collapses a programmatic
+            // range — Google Forms does — turns this write into a doubling. So
+            // the range has to read back before the write is allowed to run;
+            // the whole-value write below is the safe path when it will not.
+            var selected = true
             if canClamp, selectedRange(snapshot.element) != nsRange {
-                _ = setRange(snapshot.element, nsRange)
+                selected = setRange(snapshot.element, nsRange)
+                    && selectedRange(snapshot.element) == nsRange
             }
-            if set(snapshot.element, kAXSelectedTextAttribute as CFString, newText as CFString) {
+            if !selected {
+                DebugLog.event("ax setRange did not take → AXValue")
+            } else if set(snapshot.element, kAXSelectedTextAttribute as CFString, newText as CFString) {
                 if canClamp {
                     _ = setRange(snapshot.element, caret(after: nsRange, newText))
                 }
                 return true
+            } else {
+                DebugLog.event("ax set AXSelectedText failed")
             }
-            DebugLog.event("ax set AXSelectedText failed")
         }
 
         guard canClamp else {
@@ -95,13 +106,18 @@ enum FieldAccess {
     ///
     /// Monaco (Cursor, VS Code) answers `AXUIElementSetAttributeValue` with
     /// `.success` and changes nothing, so the return value cannot be trusted.
-    /// Deliberately three-way: only a field still holding the original text is
-    /// proof of failure. Anything else stays `unknown`, because retyping over a
-    /// write that did land would double the text.
+    ///
+    /// Four-way, because "did not read back as expected" hides two opposite
+    /// situations. A field that will not read back at all is safe to assume
+    /// applied — retyping over a write that did land would double the text. A
+    /// field that reads back as neither the original nor what we wrote is the
+    /// opposite: the write went in and took something with it, and that is the
+    /// artifact this whole check exists to catch.
     enum WriteCheck {
         case applied
         case unchanged
-        case unknown
+        case unreadable
+        case mangled(String)
     }
 
     static func verify(
@@ -111,15 +127,28 @@ enum FieldAccess {
         over original: String
     ) -> WriteCheck {
         let value = textContents(snapshot.element).value as NSString
-        guard value.length > 0 else { return .unknown }
-        if slice(value, at: range.location, length: (newText as NSString).length) == newText {
-            return .applied
+        guard value.length > 0 else { return .unreadable }
+        let before = snapshot.value as NSString
+        let wrote = (newText as NSString).length
+        if slice(value, at: range.location, length: wrote) == newText {
+            // The output is sitting where we put it — which does not prove the
+            // original left. A write that inserts instead of replacing leaves
+            // both, and the slice matches either way: that is how a field
+            // holding “Никит” *and* “Ybrbn” got logged as a confirmed replace.
+            //
+            // The field's new length is what tells them apart. Skip the check
+            // when there was no readable value to measure against, which is
+            // the browser case that the write path already special-cases.
+            guard before.length > 0 else { return .applied }
+            let expected = before.length - range.length + wrote
+            return value.length == expected ? .applied : .mangled(value as String)
         }
         if slice(value, at: range.location, length: (original as NSString).length) == original {
             return .unchanged
         }
-        DebugLog.event("ax verify: unexpected \(DebugLog.quote(value as String))")
-        return .unknown
+        // Not logged here: verify runs once per recheck, and only the verdict
+        // the confirm loop settles on is worth a line.
+        return .mangled(value as String)
     }
 
     /// Put the target under an AX selection and confirm the field agrees.
@@ -136,8 +165,16 @@ enum FieldAccess {
         if string(snapshot.element, kAXSelectedTextAttribute as CFString) == text {
             return true
         }
-        guard setRange(snapshot.element, range) else { return false }
-        return string(snapshot.element, kAXSelectedTextAttribute as CFString) == text
+        // A write the app refused can leave its selection in a state where the
+        // first setRange is swallowed — Cursor takes the second. Retry once:
+        // the readback is what makes this safe, and it is cheap.
+        for _ in 0..<2 {
+            guard setRange(snapshot.element, range) else { continue }
+            if string(snapshot.element, kAXSelectedTextAttribute as CFString) == text {
+                return true
+            }
+        }
+        return false
     }
 
     /// Put the caret back where the snapshot found it and confirm it took.
