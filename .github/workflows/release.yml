@@ -25,18 +25,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The whole history, so the action can find the previous tag.
           fetch-depth: 0
 
       - name: Calculate semantic version
         id: semver
-        uses: PaulHatch/semantic-version@502226b17e3e242e4befd0a45690fcbb27dd1373 # v6.0.3
+        uses: PaulHatch/semantic-version@6.0.3
         with:
-          tag_prefix: v
-          # The action's defaults are already Conventional Commits: `feat:` bumps
-          # the minor, `!:` or a `BREAKING CHANGE:` footer bumps the major, and
-          # anything else bumps the patch.
-          search_commit_body: true
+          tag_prefix: "v"
+          major_pattern: "(MAJOR)"
+          minor_pattern: "(MINOR)"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+          search_commit_body: false
+          user_format_type: "csv"
+          enable_prerelease_mode: true
+          debug: false
+          bump_each_commit_patch_pattern: ""
 
       - name: Report
         env:
@@ -94,7 +98,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Keyflip $TAG"
+          git tag -a "$TAG"
           git push origin "refs/tags/$TAG"
 
       - name: Create release
