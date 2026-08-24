@@ -1,8 +1,9 @@
 SWIFT := swift
 APP := .build/Keyflip.app
+ZIP := Keyflip.zip
 BIN := $(shell $(SWIFT) build -c release --show-bin-path)/Keyflip
 
-.PHONY: test build app run install clean icon glass
+.PHONY: test build app run install clean icon glass zip archive
 
 test:
 	$(SWIFT) test
@@ -44,5 +45,16 @@ glass: app
 	plutil -replace CFBundleIconName -string Keyflip $(APP)/Contents/Info.plist
 	codesign --force --sign - --identifier local.Keyflip --timestamp=none $(APP)
 
+# Zip the built bundle to $(ZIP) in the repo root. ditto (not zip) so the
+# symlinks and xattrs the code signature depends on survive the archive.
+zip: app
+	@$(MAKE) --no-print-directory archive
+
+# Archive whatever is already in $(APP), without rebuilding it.
+# Use this after `make glass` so the Assets.car icon is not clobbered.
+archive:
+	rm -f $(ZIP)
+	ditto -c -k --keepParent --sequesterRsrc $(APP) $(ZIP)
+
 clean:
-	rm -rf .build $(APP)
+	rm -rf .build $(APP) $(ZIP)

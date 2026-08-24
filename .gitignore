@@ -4,3 +4,6 @@
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 .DS_Store
+
+# Built release archive
+Keyflip.zip
