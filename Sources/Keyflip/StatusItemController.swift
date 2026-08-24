@@ -306,11 +306,10 @@ final class PairColumnsView: NSView {
         blocked: String?,
         pick: @escaping (String) -> Void
     ) -> (view: NSView, rows: [String: LayoutRow]) {
-        let box = NSView()
+        let box = ColumnBox()
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.wantsLayer = true
-        box.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.05).cgColor
         box.layer?.cornerRadius = 8
+        box.refreshLayerColors()
 
         let stack = NSStackView()
         stack.orientation = .vertical
@@ -350,11 +349,76 @@ final class PairColumnsView: NSView {
     }
 }
 
-final class LayoutRow: NSView {
+/// A view whose layer colours survive a light/dark switch.
+///
+/// `NSColor.cgColor` resolves a dynamic system colour *once*, against whatever
+/// `NSAppearance.current` happens to be, and the CGColor it returns never
+/// changes again. Two things go wrong with that. During menu construction
+/// `NSAppearance.current` is left over from the last drawing pass rather than
+/// the appearance this view will render in, so the colour can be wrong the
+/// moment it is set; and a later theme switch cannot reach it at all. Text
+/// keeps its `NSColor` and re-resolves itself, which is how a switch to light
+/// mode left black pills sitting behind black labels.
+///
+/// So layer colours are set in one place, resolved against the view's own
+/// appearance, and re-applied whenever that appearance changes.
+class ThemedView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// Set every layer colour here and nowhere else. Runs again on each
+    /// appearance change, with that appearance current.
+    func applyLayerColors() {}
+
+    final func refreshLayerColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance { [self] in
+            applyLayerColors()
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshLayerColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // The menu's appearance only reaches the view once it has a window,
+        // and that is often the first moment it is knowable.
+        refreshLayerColors()
+    }
+}
+
+extension NSColor {
+    /// The tint the menu's grouped surfaces share, so the columns and the
+    /// pills read as one panel instead of as content dropped onto it.
+    ///
+    /// `controlBackgroundColor` is the wrong tool here: it is meant for
+    /// content behind a window, and in light mode it is pure white, which
+    /// against the menu's translucent grey looked like a cut-out.
+    ///
+    /// Must be read with the target appearance current — `withAlphaComponent`
+    /// resolves the dynamic colour at the point it is called.
+    static var menuSurface: NSColor { NSColor.labelColor.withAlphaComponent(0.05) }
+}
+
+/// The rounded backing behind one column of layouts.
+final class ColumnBox: ThemedView {
+    override func applyLayerColors() {
+        layer?.backgroundColor = NSColor.menuSurface.cgColor
+    }
+}
+
+final class LayoutRow: ThemedView {
     private let action: () -> Void
     private var disabled: Bool
     private let tick: NSTextField
     private var tracking: NSTrackingArea?
+    private var hovering = false
 
     init(title: String, on: Bool, disabled: Bool, action: @escaping () -> Void) {
         self.action = action
@@ -366,9 +430,9 @@ final class LayoutRow: NSView {
         self.tick = tick
         super.init(frame: NSRect(x: 0, y: 0, width: 140, height: 22))
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
         layer?.cornerRadius = 4
         alphaValue = disabled ? 0.4 : 1
+        refreshLayerColors()
 
         let label = NSTextField(labelWithString: title)
         label.font = .menuFont(ofSize: 13)
@@ -393,13 +457,20 @@ final class LayoutRow: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    override func applyLayerColors() {
+        // Accent colour is dynamic too — this follows a change of accent in
+        // System Settings as well as a change of theme.
+        layer?.backgroundColor = hovering && !disabled
+            ? NSColor.controlAccentColor.cgColor
+            : nil
+    }
+
     func set(on: Bool, disabled: Bool) {
         self.disabled = disabled
         tick.stringValue = on ? "✓" : " "
         alphaValue = disabled ? 0.4 : 1
-        if disabled {
-            layer?.backgroundColor = nil
-        }
+        if disabled { hovering = false }
+        refreshLayerColors()
     }
 
     override func updateTrackingAreas() {
@@ -417,11 +488,13 @@ final class LayoutRow: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         guard !disabled else { return }
-        layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        hovering = true
+        refreshLayerColors()
     }
 
     override func mouseExited(with event: NSEvent) {
-        layer?.backgroundColor = nil
+        hovering = false
+        refreshLayerColors()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -478,10 +551,11 @@ final class PillsView: NSView {
     }
 }
 
-final class PillButton: NSView {
+final class PillButton: ThemedView {
     private let action: () -> Void
     private let titleField: NSTextField
     private var tracking: NSTrackingArea?
+    private var hovering = false
 
     init(title: String, subtitle: String, action: @escaping () -> Void) {
         self.action = action
@@ -491,11 +565,9 @@ final class PillButton: NSView {
         self.titleField = titleField
         super.init(frame: NSRect(x: 0, y: 0, width: 140, height: 40))
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
         layer?.cornerRadius = 7
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        refreshLayerColors()
         let sub = NSTextField(labelWithString: subtitle)
         sub.font = .systemFont(ofSize: 11)
         sub.textColor = .secondaryLabelColor
@@ -515,6 +587,13 @@ final class PillButton: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    override func applyLayerColors() {
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = hovering
+            ? NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+            : NSColor.menuSurface.cgColor
+    }
+
     func setTitle(_ title: String) {
         titleField.stringValue = title
     }
@@ -533,11 +612,13 @@ final class PillButton: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        hovering = true
+        refreshLayerColors()
     }
 
     override func mouseExited(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        hovering = false
+        refreshLayerColors()
     }
 
     override func mouseUp(with event: NSEvent) {
