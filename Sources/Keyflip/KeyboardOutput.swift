@@ -36,7 +36,13 @@ enum KeyboardOutput {
 
         var units = Array(text.utf16)
         while !units.isEmpty {
-            let chunk = Array(units.prefix(chunkSize))
+            var size = min(chunkSize, units.count)
+            // Never end a chunk on a lone high surrogate: split there and both
+            // halves of the pair are delivered as garbage.
+            if size < units.count, (0xD800...0xDBFF).contains(units[size - 1]) {
+                size -= 1
+            }
+            let chunk = Array(units.prefix(size))
             units.removeFirst(chunk.count)
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)

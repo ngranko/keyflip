@@ -28,8 +28,11 @@ public final class TypingSession: @unchecked Sendable {
 
     /// Keep the mirror in step after synthesized keys have been sent.
     public func replaceTail(_ count: Int, with text: String) {
+        // Erasing more than the mirror holds means it never described the
+        // field. Claiming it now holds exactly `text` would be a guess the
+        // blind keystroke path later deletes by; drop it instead.
         guard count <= typed.count else {
-            typed = text
+            end()
             return
         }
         typed.removeLast(count)

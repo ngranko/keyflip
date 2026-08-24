@@ -102,3 +102,15 @@ private func typing(_ characters: String, keyCode: UInt16 = 0x00) -> TapEvent {
     session.replaceTail(7, with: "привет ")
     #expect(session.typed == "привет ")
 }
+
+@Test func replaceTailDropsAMirrorItCannotAccountFor() {
+    let session = TypingSession()
+    for ch in "ghjgf" {
+        session.handle(typing(String(ch), keyCode: 0x00))
+    }
+    // More erased than the mirror ever held: it was never describing the
+    // field, so it must not go on claiming to.
+    session.replaceTail(9, with: "пропа")
+    #expect(session.typed.isEmpty)
+    #expect(!session.isLive)
+}
