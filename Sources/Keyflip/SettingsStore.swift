@@ -7,6 +7,7 @@ final class SettingsStore: @unchecked Sendable {
         static let slotA = "slotA"
         static let slotB = "slotB"
         static let trigger = "trigger"
+        static let axWriteRefused = "axWriteRefused"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -35,6 +36,17 @@ final class SettingsStore: @unchecked Sendable {
                 defaults.set(data, forKey: Key.trigger)
             }
         }
+    }
+
+    /// Apps proven to discard Accessibility writes.
+    ///
+    /// Learned once and kept. An app does not change its mind between
+    /// launches, and re-learning it costs a failed conversion on the first
+    /// trigger of every launch — which, for anyone rebuilding the app, is
+    /// most of the conversions they attempt.
+    var axWriteRefused: Set<String> {
+        get { Set(defaults.stringArray(forKey: Key.axWriteRefused) ?? []) }
+        set { defaults.set(newValue.sorted(), forKey: Key.axWriteRefused) }
     }
 
     func pairIDs() -> (String, String)? {

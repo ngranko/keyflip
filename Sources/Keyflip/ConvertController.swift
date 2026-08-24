@@ -8,7 +8,10 @@ final class ConvertController {
     let tap: EventTap
     private var maps: [String: LayoutMap] = [:]
     private var layoutObserver: AnyObject?
-    /// Apps whose Accessibility writes were proven not to land, this launch.
+    /// Apps whose Accessibility writes were proven not to land. Seeded from
+    /// settings at launch, because the first trigger in an app that refuses is
+    /// the one that cannot be made to work (ADR 0007) — so it is worth only
+    /// paying it once, ever, rather than once per launch.
     private var axWriteRefused: Set<String> = []
     /// A rewrite is posted but not yet settled; a second trigger now would
     /// interleave with it.
@@ -19,12 +22,26 @@ final class ConvertController {
     private static let confirmAttempts = 5
     private static let confirmInterval: TimeInterval = 0.03
 
+    /// Synthesized keystrokes are posted to the session tap and applied on the
+    /// app's own run loop, so `KeyboardOutput.replace` returning true says
+    /// nothing about what is on screen yet.
+    private static let keySettle: TimeInterval = 0.2
+
+    /// Monaco answers through a refused write's element with a truncated
+    /// value and recovers on its own, but not quickly — 250ms was not enough
+    /// and the next trigger, 1.8s later, read the field perfectly. So poll
+    /// rather than guess a single delay. Paid on the failure path only, and
+    /// now only the first time an app is ever seen to refuse.
+    private static let recoverDelay: TimeInterval = 0.15
+    private static let recoverAttempts = 10
+
     init(settings: SettingsStore, tap: EventTap) {
         self.settings = settings
         self.tap = tap
     }
 
     func start() {
+        axWriteRefused = settings.axWriteRefused
         reloadMaps()
         layoutObserver = InputSources.observeEnabledChanges { [weak self] in
             DispatchQueue.main.async { self?.reloadMaps() }
@@ -37,7 +54,8 @@ final class ConvertController {
             "start tap=\(tap.isActive) accessibility=\(AXIsProcessTrusted()) " +
             "path=\(Permissions.bundlePath) " +
             "pair=\(settings.slotA ?? "nil")/\(settings.slotB ?? "nil") " +
-            "trigger=\(settings.trigger.glyph) maps=\(maps.count)"
+            "trigger=\(settings.trigger.glyph) maps=\(maps.count) " +
+            "axRefused=\(axWriteRefused.sorted().joined(separator: ",") )"
         )
     }
 
@@ -90,7 +108,7 @@ final class ConvertController {
             } else if let typed = typedTarget() {
                 // Terminals and Electron editors hand back an empty AXValue.
                 // The typing mirror is the only target left.
-                applyTyped(typed, slotA: slotA, slotB: slotB)
+                applyTyped(typed, in: snap.app, slotA: slotA, slotB: slotB)
             } else {
                 DebugLog.event("no target (session=\(tap.session.isLive)) → toggle")
                 togglePair()
@@ -132,7 +150,6 @@ final class ConvertController {
         return mirror.length > 0 ? mirror.length : nil
     }
 
-
     /// Write, then confirm — and give the app time to answer.
     ///
     /// `AXUIElementSetAttributeValue` returning success proves nothing: Monaco
@@ -146,6 +163,23 @@ final class ConvertController {
         in snapshot: FieldSnapshot,
         then done: @escaping (Bool) -> Void
     ) {
+        // A selection the user made needs nothing mutated through
+        // Accessibility: the field already holds the range, and typing
+        // replaces it. Take that first.
+        //
+        // The write is what cannot be undone. Where an app discards it,
+        // Monaco being the case in hand, it also fragments the element's
+        // accessibility tree — the field reports one half of the run, then
+        // the other, and never the selection — so the keystroke fallback has
+        // nothing left to work from and the trigger is lost. Waiting does not
+        // help: there is no single element to recover. Not writing does.
+        if snapshot.selectedText == target.text,
+           typeOverSelection(target, as: output, in: snapshot)
+        {
+            done(true)
+            return
+        }
+
         if axWriteRefused.contains(snapshot.app) {
             DebugLog.event("ax write known-refused in \(snapshot.app) → retype")
             done(retype(target, as: output, in: snapshot))
@@ -154,7 +188,7 @@ final class ConvertController {
         guard FieldAccess.replace(snapshot, range: target.range, with: output) else {
             DebugLog.event("replace ok=false → retype")
             noteRefusal(snapshot.app)
-            done(retype(target, as: output, in: snapshot))
+            retypeAfterFailedWrite(target, as: output, in: snapshot, then: done)
             return
         }
         rewriteInFlight = true
@@ -196,24 +230,31 @@ final class ConvertController {
                 self?.confirm(target, output: output, in: snapshot, attempt: attempt + 1, then: done)
             }
         case .mangled(let value):
-            // Neither applied nor refused: the field is holding something that
-            // is neither what was there nor what we wrote. Hand it to the
-            // keystroke path, which types over the target only once the field
-            // confirms the original is still there, and backs out otherwise.
+            // The write neither applied nor was refused. That is worth acting
+            // on, but it is not proof of damage: Monaco's `AXValue` truncates
+            // to the trailing token under exactly these conditions, so a field
+            // still holding the right text reads back looking wrecked.
+            //
+            // Giving up here cost a good conversion every time that happened.
+            // Hand it to the keystroke path instead, which is safe against
+            // both readings — `select` types over the target only once the
+            // field confirms the original is still there and selected, and
+            // backs out when it cannot.
             DebugLog.event(
                 "replace neither applied nor refused after \(attempt) recheck(s): " +
                 "\(DebugLog.quote(value)) → retype"
             )
             noteRefusal(snapshot.app)
-            let rewritten = retype(target, as: output, in: snapshot)
             rewriteInFlight = false
-            done(rewritten)
+            retypeAfterFailedWrite(target, as: output, in: snapshot, then: done)
         case .unchanged:
             DebugLog.event("replace did not land after \(attempt) recheck(s) → retype")
             noteRefusal(snapshot.app)
-            let rewritten = retype(target, as: output, in: snapshot)
+            // Clear before retyping, not after: the keystroke path opens its
+            // own settle window, and clearing afterwards would close it again
+            // the moment it was opened.
             rewriteInFlight = false
-            done(rewritten)
+            retypeAfterFailedWrite(target, as: output, in: snapshot, then: done)
         }
     }
 
@@ -222,7 +263,95 @@ final class ConvertController {
     /// never opens the double-apply window again.
     private func noteRefusal(_ app: String) {
         guard app != "?", axWriteRefused.insert(app).inserted else { return }
-        DebugLog.event("ax writes do not land in \(app); retyping from now on")
+        settings.axWriteRefused = axWriteRefused
+        DebugLog.event("ax writes do not land in \(app); remembered")
+    }
+
+    /// Fall back to keystrokes, from a field we have looked at again.
+    ///
+    /// The element a refused write came back through is not reliable. Monaco
+    /// answers through it with a truncated value and will not confirm the
+    /// selection, so `select` fails all of its attempts and the fallback gives
+    /// up — while the next trigger, reading the field from scratch, finds the
+    /// same selection intact and rewrites it without trouble. Re-reading is
+    /// the whole of that difference.
+    ///
+    /// It cannot always be done at once. `bestTextElement` keeps the focused
+    /// element whenever it reports *any* value, so an immediate re-read hands
+    /// back the same truncated node; in the log Monaco was answering properly
+    /// again two seconds later. So: try now, and only wait when now is no
+    /// good. Apps that hand back a usable field straight away — every app that
+    /// is not Monaco — pay nothing for this.
+    private func retypeAfterFailedWrite(
+        _ target: (text: String, range: NSRange),
+        as output: String,
+        in snapshot: FieldSnapshot,
+        then done: @escaping (Bool) -> Void
+    ) {
+        retypeAfterFailedWrite(target, as: output, in: snapshot, attempt: 0, then: done)
+    }
+
+    private func retypeAfterFailedWrite(
+        _ target: (text: String, range: NSRange),
+        as output: String,
+        in snapshot: FieldSnapshot,
+        attempt: Int,
+        then done: @escaping (Bool) -> Void
+    ) {
+        // Log the read itself on the first look and the last, never on the
+        // polls between: two lines say what happened, twelve bury it.
+        let loud = attempt == 0 || attempt == Self.recoverAttempts
+        if let fresh = usable(snapshot, target: target, logging: loud) {
+            if attempt > 0 {
+                DebugLog.event("field usable again after \(attempt) re-read(s)")
+            }
+            rewriteInFlight = false
+            done(retype(target, as: output, in: fresh))
+            return
+        }
+        guard attempt < Self.recoverAttempts else {
+            DebugLog.event("field never became usable after \(attempt) re-read(s)")
+            rewriteInFlight = false
+            done(retype(target, as: output, in: snapshot))
+            return
+        }
+        rewriteInFlight = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.recoverDelay) { [weak self] in
+            self?.retypeAfterFailedWrite(
+                target, as: output, in: snapshot, attempt: attempt + 1, then: done
+            )
+        }
+    }
+
+    /// A fresh read of the field, or nil when it tells us less than the
+    /// snapshot we already hold and so cannot be trusted to type into.
+    private func usable(
+        _ snapshot: FieldSnapshot,
+        target: (text: String, range: NSRange),
+        logging: Bool
+    ) -> FieldSnapshot? {
+        guard case .field(let fresh) = FieldAccess.read() else {
+            if logging { DebugLog.event("re-read: no field") }
+            return nil
+        }
+        if logging {
+            DebugLog.event(
+                "re-read: app=\(fresh.app) value=\(DebugLog.quote(fresh.value)) " +
+                "sel=\(fresh.selectedRange) selected=\(DebugLog.quote(fresh.selectedText))"
+            )
+        }
+        guard fresh.app == snapshot.app else { return nil }
+        if fresh.selectedText == target.text {
+            return fresh
+        }
+        // No selection to go on, so accept it only while the target is still
+        // sitting exactly where we were about to write.
+        let value = fresh.value as NSString
+        guard target.range.location >= 0,
+              target.range.location + target.range.length <= value.length,
+              value.substring(with: target.range) == target.text
+        else { return nil }
+        return fresh
     }
 
     /// The field read but would not take the write. Two ways out, in order of
@@ -234,10 +363,7 @@ final class ConvertController {
         as output: String,
         in snapshot: FieldSnapshot
     ) -> Bool {
-        if FieldAccess.select(snapshot, range: target.range, expecting: target.text) {
-            guard KeyboardOutput.replace(deleting: 0, with: output) else { return false }
-            DebugLog.event("replace via selection+keys ok=true")
-            syncMirror(after: target.text, became: output)
+        if typeOverSelection(target, as: output, in: snapshot) {
             return true
         }
         guard let typed = typedTarget(), typed.text == target.text else {
@@ -253,7 +379,65 @@ final class ConvertController {
         guard KeyboardOutput.replace(deleting: erase, with: replacement) else { return false }
         DebugLog.event("replace via keys erase=\(erase) ok=true")
         tap.session.replaceTail(erase, with: replacement)
+        settleKeys(expecting: output, in: snapshot.app)
         return true
+    }
+
+    /// Put the target under a selection the field agrees with, and type over
+    /// it. No range arithmetic and no caret assumptions — the field resolves
+    /// the replacement itself.
+    private func typeOverSelection(
+        _ target: (text: String, range: NSRange),
+        as output: String,
+        in snapshot: FieldSnapshot
+    ) -> Bool {
+        guard FieldAccess.select(snapshot, range: target.range, expecting: target.text),
+              KeyboardOutput.replace(deleting: 0, with: output)
+        else { return false }
+        DebugLog.event("replace via selection+keys ok=true")
+        syncMirror(after: target.text, became: output)
+        settleKeys(expecting: output, in: snapshot.app)
+        return true
+    }
+
+    /// Keep the trigger closed until synthesized keystrokes have had time to
+    /// reach the app, then check what actually landed.
+    ///
+    /// `rewriteInFlight` used to cover only the Accessibility confirm loop, so
+    /// the keystroke paths returned with their events still queued. A second
+    /// trigger — and a user who taps again because nothing visibly happened is
+    /// the common case — then read the field before those keys arrived,
+    /// converted the stale text a second time, and the two rewrites
+    /// interleaved: the typed text and the converted text both left behind.
+    private func settleKeys(expecting text: String, in app: String) {
+        rewriteInFlight = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keySettle) { [weak self] in
+            guard let self else { return }
+            self.rewriteInFlight = false
+            self.auditKeys(expecting: text, in: app)
+        }
+    }
+
+    /// The keystroke paths are blind — nothing in them can tell whether the
+    /// backspaces and the text both landed. Read the field back once and log
+    /// only a disagreement: that line is the whole diagnosis when someone
+    /// reports leftover text, and silence keeps the log readable.
+    private func auditKeys(expecting text: String, in app: String) {
+        guard case .field(let snap) = FieldAccess.read(),
+              // Switching app or field in the settle window means this reads
+              // somewhere the rewrite never went. Silence beats a false alarm.
+              snap.app == app,
+              !snap.value.isEmpty,
+              !snap.value.contains(text),
+              // Monaco answers with the trailing token rather than the whole
+              // field. A readback contained *in* what we wrote is a truncated
+              // read, not missing text, and saying otherwise cries wolf on
+              // every rewrite that worked.
+              !text.contains(snap.value)
+        else { return }
+        DebugLog.event(
+            "keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(snap.value))"
+        )
     }
 
     /// Keep the mirror usable after a rewrite the mirror did not drive, or drop
@@ -282,6 +466,7 @@ final class ConvertController {
     /// then type the conversion. No Accessibility involved.
     private func applyTyped(
         _ target: (text: String, trailing: String),
+        in app: String,
         slotA: LayoutMap,
         slotB: LayoutMap
     ) {
@@ -306,6 +491,7 @@ final class ConvertController {
             DebugLog.event("keys: erase=\(erase) ok=\(ok)")
             guard ok else { return }
             tap.session.replaceTail(erase, with: replacement)
+            settleKeys(expecting: conv.output, in: app)
         }
         follow(conv.destinationID)
     }
