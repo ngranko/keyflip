@@ -6,9 +6,22 @@ private let abcID = "com.apple.keylayout.ABC"
 private let rusPCID = "com.apple.keylayout.RussianWin"
 private let shift = KeyStroke.shiftMods
 
+/// Live layout lookups, serialised and cached.
+///
+/// The Text Input Source APIs abort when called from several threads at once,
+/// and swift-testing runs these tests in parallel — two concurrent callers got
+/// away with it, five did not. The app only ever touches them from the main
+/// actor, so the lock belongs here rather than in `InputSources`.
+private let liveMapLock = NSLock()
+nonisolated(unsafe) private var liveMapCache: [String: LayoutMap?] = [:]
+
 private func liveMap(_ id: String) -> LayoutMap? {
-    guard let info = InputSources.layout(id: id) else { return nil }
-    return InputSources.map(for: info)
+    liveMapLock.withLock {
+        if let cached = liveMapCache[id] { return cached }
+        let map = InputSources.layout(id: id).flatMap(InputSources.map(for:))
+        liveMapCache[id] = map
+        return map
+    }
 }
 
 private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
@@ -183,4 +196,54 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
         return
     }
     #expect(conv.output == ",")
+}
+
+@Test func smartApostropheConvertsLikeTheKeyThatProducedIt() throws {
+    let abc = try #require(liveMap(abcID), "ABC is not installed")
+    let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
+    // macOS substitutes U+2019 as you type, so the field holds a character
+    // that is on no layout. It still came off the '/э key.
+    let decision = PairConversion.convert(
+        target: "\u{2019}njn",
+        slotA: abc,
+        slotB: rus,
+        currentSourceID: abc.id
+    )
+    guard case .rewrite(let conv) = decision else {
+        Issue.record("expected rewrite")
+        return
+    }
+    #expect(conv.output == "этот")
+}
+
+@Test func straightApostropheIsUnaffectedByTheFolding() throws {
+    let abc = try #require(liveMap(abcID), "ABC is not installed")
+    let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
+    let decision = PairConversion.convert(
+        target: "'njn",
+        slotA: abc,
+        slotB: rus,
+        currentSourceID: abc.id
+    )
+    guard case .rewrite(let conv) = decision else {
+        Issue.record("expected rewrite")
+        return
+    }
+    #expect(conv.output == "этот")
+}
+
+@Test func emDashIsLeftAloneRatherThanFoldedOntoTheHyphen() throws {
+    let abc = try #require(liveMap(abcID), "ABC is not installed")
+    let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
+    let decision = PairConversion.convert(
+        target: "njn \u{2014} vfufp",
+        slotA: abc,
+        slotB: rus,
+        currentSourceID: abc.id
+    )
+    guard case .rewrite(let conv) = decision else {
+        Issue.record("expected rewrite")
+        return
+    }
+    #expect(conv.output == "тот \u{2014} магаз")
 }
