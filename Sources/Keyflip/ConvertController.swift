@@ -111,10 +111,27 @@ final class ConvertController {
             }
         }
         guard tap.session.isLive,
-              let word = LastWord.range(in: snap.value, caretUTF16: snap.selectedRange.location)
+              let word = LastWord.range(
+                  in: snap.value,
+                  caretUTF16: snap.selectedRange.location,
+                  sessionUTF16: sessionExtent()
+              )
         else { return nil }
         return ((snap.value as NSString).substring(with: word.nsRange), word.nsRange)
     }
+
+    /// How much of the text in front of the caret this typing session put
+    /// there, so a run that started before it does not get converted along
+    /// with it (`LastWord.range`).
+    ///
+    /// `nil` when the mirror was emptied by a key we could not account for.
+    /// The session is still live, but where it began is no longer known, and
+    /// clipping to a zero-length mirror would refuse every conversion.
+    private func sessionExtent() -> Int? {
+        let mirror = tap.session.typed as NSString
+        return mirror.length > 0 ? mirror.length : nil
+    }
+
 
     /// Write, then confirm — and give the app time to answer.
     ///
