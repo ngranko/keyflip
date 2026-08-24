@@ -47,11 +47,38 @@ enum DebugLog {
         private let lock = NSLock()
         private var lines: [String] = []
         private let io = DispatchQueue(label: "local.Keyflip.debuglog", qos: .utility)
+
+        /// The artifacts this log exists to explain show up once in a hundred
+        /// conversions, and the app is reinstalled between most of them.
+        /// Truncating at launch threw away the only record every time, so the
+        /// file is appended to and trimmed instead.
+        private static let maxBytes = 1 << 20
+
         /// Touched only from `io`, which is serial.
         private lazy var handle: FileHandle? = {
-            FileManager.default.createFile(atPath: DebugLog.fileURL.path, contents: nil)
-            return try? FileHandle(forWritingTo: DebugLog.fileURL)
+            let path = DebugLog.fileURL.path
+            if FileManager.default.fileExists(atPath: path) {
+                Self.trim(path)
+            } else {
+                FileManager.default.createFile(atPath: path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: DebugLog.fileURL) else { return nil }
+            _ = try? handle.seekToEnd()
+            return handle
         }()
+
+        /// Keep the tail, cut on a line boundary so the first surviving entry
+        /// is still a whole entry.
+        private static func trim(_ path: String) {
+            guard let data = FileManager.default.contents(atPath: path), data.count > maxBytes else {
+                return
+            }
+            var tail = data.suffix(maxBytes)
+            if let newline = tail.firstIndex(of: 0x0A) {
+                tail = tail[tail.index(after: newline)...]
+            }
+            try? Data(tail).write(to: URL(fileURLWithPath: path))
+        }
 
         var onChange: (@Sendable () -> Void)? {
             get { lock.withLock { _onChange } }
