@@ -12,16 +12,52 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var pillsView: PillsView?
     private var menuIsOpen = false
 
+    /// The item's identity in the menu bar, and the one thing about it that
+    /// has to stay the same forever.
+    ///
+    /// Without an `autosaveName` AppKit invents one — `Item-0`, by creation
+    /// order — and that is not an identity at all: every status item whose app
+    /// never set one is also `Item-0`, ControlCenter's included, as
+    /// `defaults read com.apple.controlcenter` will show. macOS files the
+    /// item's menu bar position under that name, and so does every menu bar
+    /// manager that tracks items across launches. Ice caches a window ID per
+    /// item and asks the window server for its bounds when dragging one
+    /// between sections; against an identity that is shared, reused, and
+    /// re-created under it, the cached ID goes stale and the lookup comes back
+    /// empty — "Missing bounds rectangle for Keyflip".
+    private static let autosaveName = "Keyflip"
+
     init(settings: SettingsStore, convert: ConvertController, tap: EventTap) {
         self.settings = settings
         self.convert = convert
         self.tap = tap
+        Self.adoptLegacyPosition()
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem.autosaveName = Self.autosaveName
         super.init()
         configureButton()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    /// Carry the position AppKit filed under the invented name over to the
+    /// real one, once.
+    ///
+    /// Naming the item changes the key its position lives under, so without
+    /// this the icon jumps to the end of the menu bar on the first launch
+    /// after the fix — the icon moving on its own being the exact complaint
+    /// this is meant to end. Runs before the item is created, because that is
+    /// when AppKit reads the position back.
+    private static func adoptLegacyPosition() {
+        let defaults = UserDefaults.standard
+        let legacy = "NSStatusItem Preferred Position Item-0"
+        let current = "NSStatusItem Preferred Position \(autosaveName)"
+        guard defaults.object(forKey: current) == nil,
+              let position = defaults.object(forKey: legacy) as? Double
+        else { return }
+        defaults.set(position, forKey: current)
+        defaults.removeObject(forKey: legacy)
     }
 
     private func configureButton() {
@@ -220,15 +256,32 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             ])
         }
 
-        if let button = statusItem.button {
-            let rect = button.window?.convertToScreen(button.convert(button.bounds, to: nil))
-            if let rect {
-                panel.setFrameOrigin(NSPoint(x: rect.midX - 120, y: rect.minY - 100))
-            }
-        }
+        panel.setFrameOrigin(recorderOrigin(sized: panel.frame.size))
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         recordPanel = panel
+    }
+
+    /// Where to put the recorder, given a menu bar item that may not be
+    /// anywhere the user can look.
+    ///
+    /// Ice and Bartender hide an item by parking its window off the left edge
+    /// — x ≈ -4000 in the window server's own list, which is where Keyflip's
+    /// sits while it is in a hidden section. That is a perfectly real
+    /// rectangle, so the old check for one passed and put the panel out there
+    /// with it: a window asking for a keystroke, off screen, with the trigger
+    /// tap already listening. Anchor to the button only while it is on a
+    /// screen, and land in the middle of the display when it is not.
+    private func recorderOrigin(sized size: NSSize) -> NSPoint {
+        if let button = statusItem.button, let window = button.window {
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(rect) }) {
+                return NSPoint(x: rect.midX - size.width / 2, y: rect.minY - size.height - 12)
+            }
+        }
+        let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2)
     }
 
     func windowWillClose(_ notification: Notification) {
