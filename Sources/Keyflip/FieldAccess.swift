@@ -1,6 +1,7 @@
 import ApplicationServices
 import Carbon
 import Foundation
+import LayoutConversion
 
 struct FieldSnapshot {
     var element: AXUIElement
@@ -57,10 +58,28 @@ enum FieldAccess {
         }
     }
 
-    static func replace(_ snapshot: FieldSnapshot, range: NSRange, with newText: String) -> Bool {
+    /// What came of a write, which is three things and not two.
+    ///
+    /// "It did not happen" hides a refusal — the app was asked and said no,
+    /// which is worth remembering about the app — and a decline, where the
+    /// only write left was broader than the target and we would not make it.
+    /// A decline says nothing about the app and must not be recorded against
+    /// it: `axWriteRefused` is persisted, and one field we chose not to
+    /// overwrite would send every later conversion there down the blind path.
+    enum WriteAttempt {
+        case wrote
+        case refused
+        case declined
+    }
+
+    static func replace(
+        _ snapshot: FieldSnapshot,
+        range: NSRange,
+        with newText: String
+    ) -> WriteAttempt {
         AXUIElementSetMessagingTimeout(snapshot.element, timeout)
-        let valueLength = (snapshot.value as NSString).length
-        let canClamp = valueLength > 0
+        let value = snapshot.value as NSString
+        let canClamp = value.length > 0
         let nsRange = canClamp ? clamp(range, in: snapshot.value) : range
 
         // Browser fields often have AXSelectedText and no AXValue. Do not
@@ -70,8 +89,11 @@ enum FieldAccess {
             // *inserts* instead of replacing, leaving the original sitting next
             // to the conversion. A web input that collapses a programmatic
             // range — Google Forms does — turns this write into a doubling. So
-            // the range has to read back before the write is allowed to run;
-            // the whole-value write below is the safe path when it will not.
+            // the range has to read back before the write is allowed to run.
+            //
+            // What happens when it will not read back is the whole-value write
+            // below, and only where that write cannot reach past the target;
+            // otherwise nothing happens here and the keystroke path takes it.
             var selected = true
             if canClamp, selectedRange(snapshot.element) != nsRange {
                 selected = setRange(snapshot.element, nsRange)
@@ -83,7 +105,7 @@ enum FieldAccess {
                 if canClamp {
                     _ = setRange(snapshot.element, caret(after: nsRange, newText))
                 }
-                return true
+                return .wrote
             } else {
                 DebugLog.event("ax set AXSelectedText failed")
             }
@@ -91,15 +113,34 @@ enum FieldAccess {
 
         guard canClamp else {
             DebugLog.event("ax replace abort: empty AXValue, AXSelectedText failed")
-            return false
+            return .refused
         }
-        let updated = (snapshot.value as NSString).replacingCharacters(in: nsRange, with: newText)
+        // The write below replaces every character in the field, not just the
+        // target — including the ones this snapshot may describe wrongly. Zen's
+        // multi-line AXTextArea reports offsets that run behind its own
+        // AXValue, so the string rebuilt here is not always what the field
+        // holds, and setting it flattens the difference across the whole
+        // document: line breaks first. That is a 460-character message spoiled
+        // to fix one word.
+        //
+        // Confine it to fields where there is nothing outside the target to
+        // lose — a search box, a combo box, a text field holding one word,
+        // which is every case this path was ever wanted for. Anything wider
+        // goes to the keystroke path, which touches only what it selects.
+        guard TextRange.spansEverything(nsRange, in: snapshot.value) else {
+            DebugLog.event(
+                "ax value write declined: \(value.length - nsRange.length) chars outside " +
+                "range=\(nsRange) → retype"
+            )
+            return .declined
+        }
+        let updated = value.replacingCharacters(in: nsRange, with: newText)
         guard set(snapshot.element, kAXValueAttribute as CFString, updated as CFString) else {
             DebugLog.event("ax set AXValue failed")
-            return false
+            return .refused
         }
         _ = setRange(snapshot.element, caret(after: nsRange, newText))
-        return true
+        return .wrote
     }
 
     /// Whether a write that *reported* success actually landed.

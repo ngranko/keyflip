@@ -103,39 +103,86 @@ final class ConvertController {
                 "field: app=\(snap.app) role=\(snap.role) value=\(DebugLog.quote(snap.value)) " +
                 "sel=\(snap.selectedRange) selected=\(DebugLog.quote(snap.selectedText))"
             )
-            if let target = target(in: snap) {
-                apply(target, snapshot: snap, slotA: slotA, slotB: slotB)
-            } else if let typed = typedTarget() {
-                // Terminals and Electron editors hand back an empty AXValue.
-                // The typing mirror is the only target left.
-                applyTyped(typed, in: snap.app, slotA: slotA, slotB: slotB)
-            } else {
-                DebugLog.event("no target (session=\(tap.session.isLive)) → toggle")
+            switch target(in: snap) {
+            case .range(let text, let range):
+                apply((text: text, range: range), snapshot: snap, slotA: slotA, slotB: slotB)
+            case .askTheMirror:
+                if let typed = typedTarget() {
+                    // Terminals and Electron editors hand back an empty
+                    // AXValue. The typing mirror is the only target left.
+                    applyTyped(typed, in: snap.app, slotA: slotA, slotB: slotB)
+                } else {
+                    DebugLog.event("no target (session=\(tap.session.isLive)) → toggle")
+                    togglePair()
+                }
+            case .unusable:
                 togglePair()
             }
         }
     }
 
+    /// What the field is good for this trigger.
+    private enum FieldTarget {
+        /// A range the field and the typing mirror both stand behind.
+        case range(text: String, range: NSRange)
+        /// No range to be had from the field. The mirror may still have one —
+        /// that is the whole of how conversion works in a terminal.
+        case askTheMirror
+        /// The field reads clearly and contradicts the mirror, and the text
+        /// the mirror describes is nowhere in it. Neither witness can say
+        /// where the target is, so nothing is rewritten.
+        case unusable
+    }
+
     /// A non-empty selection always wins. Otherwise the last run of
-    /// non-whitespace, and only while a typing session is live (ADR 0002).
-    private func target(in snap: FieldSnapshot) -> (text: String, range: NSRange)? {
+    /// non-whitespace, and only while a typing session is live (ADR 0002) and
+    /// agrees with the field about what is in front of the caret.
+    private func target(in snap: FieldSnapshot) -> FieldTarget {
         if !snap.selectedText.isEmpty {
-            return (snap.selectedText, snap.selectedRange)
+            return .range(text: snap.selectedText, range: snap.selectedRange)
         }
         if snap.selectedRange.length > 0 {
             let range = FieldAccess.clamp(snap.selectedRange, in: snap.value)
             if range.length > 0 {
-                return ((snap.value as NSString).substring(with: range), range)
+                return .range(text: (snap.value as NSString).substring(with: range), range: range)
             }
         }
-        guard tap.session.isLive,
-              let word = LastWord.range(
-                  in: snap.value,
-                  caretUTF16: snap.selectedRange.location,
-                  sessionUTF16: sessionExtent()
-              )
-        else { return nil }
-        return ((snap.value as NSString).substring(with: word.nsRange), word.nsRange)
+        guard tap.session.isLive else { return .askTheMirror }
+        let mirror = tap.session.typed
+        if let clash = LastWord.caretDisagreement(
+            with: mirror,
+            in: snap.value,
+            caretUTF16: snap.selectedRange.location
+        ) {
+            // One of the two is wrong, and which one decides what is safe next.
+            //
+            // If the text the mirror describes is sitting at the end of the
+            // field after all, the caret is the liar — Zen's multi-line
+            // AXTextArea reports offsets that run behind its own AXValue — and
+            // keystrokes still land correctly, because the caret they use is
+            // the real one rather than the number we were handed. Ranges are
+            // what cannot be trusted, so give up on them and keep the mirror.
+            //
+            // If it is nowhere to be found, the mirror is the liar: the field
+            // transformed what was typed, smart quotes being the everyday
+            // case, and backspacing by a count drawn from the mirror would eat
+            // text it never accounted for. Neither path is safe then.
+            let mirrored = snap.value.hasSuffix(mirror)
+            DebugLog.event(
+                "caret disagrees with mirror: field \(DebugLog.quote(clash.field)) " +
+                "vs typed \(DebugLog.quote(clash.mirror)) → \(mirrored ? "keys" : "no rewrite")"
+            )
+            return mirrored ? .askTheMirror : .unusable
+        }
+        guard let word = LastWord.range(
+            in: snap.value,
+            caretUTF16: snap.selectedRange.location,
+            sessionUTF16: sessionExtent()
+        ) else { return .askTheMirror }
+        return .range(
+            text: (snap.value as NSString).substring(with: word.nsRange),
+            range: word.nsRange
+        )
     }
 
     /// How much of the text in front of the caret this typing session put
@@ -185,14 +232,19 @@ final class ConvertController {
             done(retype(target, as: output, in: snapshot))
             return
         }
-        guard FieldAccess.replace(snapshot, range: target.range, with: output) else {
+        switch FieldAccess.replace(snapshot, range: target.range, with: output) {
+        case .wrote:
+            rewriteInFlight = true
+            confirm(target, output: output, in: snapshot, attempt: 0, then: done)
+        case .refused:
             DebugLog.event("replace ok=false → retype")
             noteRefusal(snapshot.app)
             retypeAfterFailedWrite(target, as: output, in: snapshot, then: done)
-            return
+        case .declined:
+            // Nothing was written and the app was never asked, so there is no
+            // refusal to remember — only a field too wide to overwrite.
+            retypeAfterFailedWrite(target, as: output, in: snapshot, then: done)
         }
-        rewriteInFlight = true
-        confirm(target, output: output, in: snapshot, attempt: 0, then: done)
     }
 
     private func confirm(
