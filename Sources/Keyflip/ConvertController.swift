@@ -11,11 +11,11 @@ final class ConvertController {
     private let rewriter: FieldRewriter
     private let reader: FieldReader
 
-    init(settings: SettingsStore, tap: EventTap, reader: FieldReader) {
+    init(settings: SettingsStore, tap: EventTap, reader: FieldReader, rewriter: FieldRewriter) {
         self.settings = settings
         self.tap = tap
         self.reader = reader
-        self.rewriter = FieldRewriter(settings: settings, session: tap.session, reader: reader)
+        self.rewriter = rewriter
     }
 
     func start() {
