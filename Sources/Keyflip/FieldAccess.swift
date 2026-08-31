@@ -61,7 +61,7 @@ enum FieldAccess {
         // Browser fields often have AXSelectedText and no AXValue. Nothing
         // that follows may clamp the write away against an empty value.
         let hasValue = (reading.value as NSString).length > 0
-        let nsRange = hasValue ? TextRange.clamp(range, in: reading.value) : range
+        let nsRange = hasValue ? range.clamped(in: reading.value) : range
 
         if !reading.selectedText.isEmpty || nsRange.length > 0,
            writeOverSelection(element, range: nsRange, hasValue: hasValue, with: newText)
@@ -119,7 +119,7 @@ enum FieldAccess {
             return .refused
         }
         let value = reading.value as NSString
-        guard TextRange.spansEverything(range, in: reading.value) else {
+        guard range.spansEverything(in: reading.value) else {
             DebugLog.event(
                 "ax value write declined: \(value.length - range.length) chars outside " +
                 "range=\(range) → retype"
@@ -327,7 +327,7 @@ enum FieldAccess {
         if range.length > 0, let slice = stringForRange(element, range), !slice.isEmpty {
             return slice
         }
-        let clamped = TextRange.clamp(range, in: value)
+        let clamped = range.clamped(in: value)
         guard clamped.length > 0 else { return "" }
         return (value as NSString).substring(with: clamped)
     }
