@@ -12,7 +12,7 @@ public struct TextRange: Equatable, Sendable {
     public var nsRange: NSRange { NSRange(location: location, length: length) }
 }
 
-public enum LastWord {
+enum LastWord {
     /// The run of non-whitespace in front of the caret, clipped to the part of
     /// it `sessionUTF16` says this typing session put there. Nil takes the
     /// whole run.
@@ -20,7 +20,7 @@ public enum LastWord {
     /// Clipping matters because from-source is decided by a vote: a run that
     /// straddles a session boundary carries a correct prefix long enough to
     /// drag the whole word into the wrong layout.
-    public static func range(
+    static func range(
         in text: String,
         caretUTF16: Int,
         sessionUTF16: Int? = nil
@@ -58,7 +58,7 @@ public enum LastWord {
         return TextRange(location: from, length: length)
     }
 
-    public static func substring(
+    static func substring(
         in text: String,
         caretUTF16: Int,
         sessionUTF16: Int? = nil
@@ -79,7 +79,7 @@ public enum LastWord {
     ///
     /// An empty mirror, or nothing in front of the caret, is no opinion rather
     /// than a contradiction. A longer mirror is compared over the overlap.
-    public static func caretDisagreement(
+    static func caretDisagreement(
         with mirror: String,
         in text: String,
         caretUTF16: Int
@@ -104,7 +104,7 @@ public enum LastWord {
     /// itself. The tell is the mirror's run reaching past where the value
     /// begins — a run that genuinely got shorter does not end in what the
     /// field shows.
-    public static func hidesStartOfRun(
+    static func hidesStartOfRun(
         from mirror: String,
         in text: String,
         caretUTF16: Int
@@ -120,6 +120,14 @@ public enum LastWord {
 }
 
 extension TextRange {
+    /// A range trimmed to what `text` actually holds.
+    public static func clamp(_ range: NSRange, in text: String) -> NSRange {
+        let len = (text as NSString).length
+        let loc = max(0, min(range.location, len))
+        let end = max(loc, min(range.location + range.length, len))
+        return NSRange(location: loc, length: end - loc)
+    }
+
     /// Whether nothing but whitespace lies outside `range` — what a caller
     /// asks before replacing a field wholesale.
     public static func spansEverything(_ range: NSRange, in text: String) -> Bool {

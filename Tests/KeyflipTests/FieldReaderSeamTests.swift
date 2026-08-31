@@ -19,7 +19,7 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
 @MainActor
 @Test func aFreshReadStillShowingTheSelectionIsUsable() {
     let before = reading(value: "сщьз", caret: 0, selectionLength: 4, selectedText: "сщьз")
-    let target = FieldRewriter.Target(text: "сщьз", range: NSRange(location: 0, length: 4))
+    let target = Target(text: "сщьз", range: NSRange(location: 0, length: 4))
     let fresh = rewriter(reading: [before]).usable(snapshot(before), target: target, logging: false)
     #expect(fresh?.reading.selectedText == "сщьз")
 }
@@ -29,7 +29,7 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
 @MainActor
 @Test func aFreshReadWithTheTargetStillInPlaceIsUsable() {
     let before = reading(value: "one сщьз", caret: 8)
-    let target = FieldRewriter.Target(text: "сщьз", range: NSRange(location: 4, length: 4))
+    let target = Target(text: "сщьз", range: NSRange(location: 4, length: 4))
     let fresh = rewriter(reading: [before]).usable(snapshot(before), target: target, logging: false)
     #expect(fresh != nil)
 }
@@ -41,7 +41,7 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
 @Test func aTruncatedFreshReadIsNotUsable() {
     let before = reading(value: "one сщьз", caret: 8)
     let truncated = reading(value: "сщ", caret: 2)
-    let target = FieldRewriter.Target(text: "сщьз", range: NSRange(location: 4, length: 4))
+    let target = Target(text: "сщьз", range: NSRange(location: 4, length: 4))
     let fresh = rewriter(reading: [truncated]).usable(
         snapshot(before), target: target, logging: false
     )
@@ -54,7 +54,7 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
 @Test func aFreshReadFromAnotherAppIsNotUsable() {
     let before = reading(app: "Cursor", value: "сщьз", caret: 4)
     let elsewhere = reading(app: "Slack", value: "сщьз", caret: 4)
-    let target = FieldRewriter.Target(text: "сщьз", range: NSRange(location: 0, length: 4))
+    let target = Target(text: "сщьз", range: NSRange(location: 0, length: 4))
     let fresh = rewriter(reading: [elsewhere]).usable(
         snapshot(before), target: target, logging: false
     )

@@ -11,8 +11,6 @@ final class ConvertController {
     private let rewriter: FieldRewriter
     private let reader: FieldReader
 
-    typealias Target = FieldRewriter.Target
-
     init(settings: SettingsStore, tap: EventTap, reader: FieldReader) {
         self.settings = settings
         self.tap = tap
@@ -89,95 +87,36 @@ final class ConvertController {
     }
 
     private func convertField(_ snap: FieldSnapshot, slotA: LayoutMap, slotB: LayoutMap) {
-        switch target(in: snap.reading) {
-        case .found(let target):
+        let verdict = TargetSelection.choose(in: snap.reading, session: tap.session, note: log)
+        switch verdict {
+        case .field(let target):
             apply(target, snapshot: snap, slotA: slotA, slotB: slotB)
-        case .askTheMirror:
-            guard let typed = tap.session.lastRun else {
-                DebugLog.event("no target (session=\(tap.session.isLive)) → toggle")
-                togglePair()
-                return
-            }
-            // Terminals and Electron editors hand back an empty AXValue.
-            applyTyped(typed, in: snap.reading.app, slotA: slotA, slotB: slotB)
-        case .unusable:
+        case .mirror(let text, let trailing):
+            applyTyped(
+                (text: text, trailing: trailing),
+                in: snap.reading.app,
+                slotA: slotA,
+                slotB: slotB
+            )
+        case .none, .unusable:
             togglePair()
         }
     }
 
-    /// What the field is good for this trigger.
-    enum FieldTarget {
-        /// A range the field and the typing mirror both stand behind.
-        case found(Target)
-        /// No range from the field; the mirror may still have one.
-        case askTheMirror
-        /// The two witnesses contradict each other, so neither can say where
-        /// the target is and nothing is rewritten.
-        case unusable
-    }
-
-    /// A non-empty selection always wins. Otherwise the last run of
-    /// non-whitespace, and only while a typing session is live (ADR 0002) and
-    /// agrees with the field about what is in front of the caret.
-    func target(in reading: FieldReading) -> FieldTarget {
-        if !reading.selectedText.isEmpty {
-            return .found(Target(text: reading.selectedText, range: reading.selectedRange))
-        }
-        if reading.selectedRange.length > 0 {
-            let range = FieldAccess.clamp(reading.selectedRange, in: reading.value)
-            if range.length > 0 {
-                return .found(Target(
-                    text: (reading.value as NSString).substring(with: range),
-                    range: range
-                ))
-            }
-        }
-        guard tap.session.isLive else { return .askTheMirror }
-        let mirror = tap.session.typed
-        if let clash = LastWord.caretDisagreement(
-            with: mirror,
-            in: reading.value,
-            caretUTF16: reading.selectedRange.location
-        ) {
-            // If the mirror's text is at the end of the field after all, the
-            // caret is the liar but keystrokes still land, since they use the
-            // real one — so drop ranges and keep the mirror. If it is nowhere in
-            // the field, the field transformed what was typed (smart quotes) and
-            // erasing by the mirror's count would eat text it never saw.
-            let mirrored = reading.value.hasSuffix(mirror)
+    /// The verdict's own account of itself, in the words the log has always
+    /// used for it.
+    private func log(_ note: TargetNote) {
+        switch note {
+        case .caretDisagreed(let field, let mirror, let keptMirror):
             DebugLog.event(
-                "caret disagrees with mirror: field \(DebugLog.quote(clash.field)) " +
-                "vs typed \(DebugLog.quote(clash.mirror)) → \(mirrored ? "keys" : "no rewrite")"
+                "caret disagrees with mirror: field \(DebugLog.quote(field)) " +
+                "vs typed \(DebugLog.quote(mirror)) → \(keptMirror ? "keys" : "no rewrite")"
             )
-            return mirrored ? .askTheMirror : .unusable
-        }
-        if LastWord.hidesStartOfRun(
-            from: mirror,
-            in: reading.value,
-            caretUTF16: reading.selectedRange.location
-        ) {
-            // Converting what the field shows would convert “(” to itself and
-            // leave the word behind it (Cursor, 2026-08-27).
+        case .fieldHidesStartOfRun(let mirror):
             DebugLog.event("field shows only the tail of \(DebugLog.quote(mirror)) → keys")
-            return .askTheMirror
+        case .noTarget(let sessionLive):
+            DebugLog.event("no target (session=\(sessionLive)) → toggle")
         }
-        guard let word = LastWord.range(
-            in: reading.value,
-            caretUTF16: reading.selectedRange.location,
-            sessionUTF16: sessionExtent()
-        ) else { return .askTheMirror }
-        return .found(Target(
-            text: (reading.value as NSString).substring(with: word.nsRange),
-            range: word.nsRange
-        ))
-    }
-
-    /// How much of the text in front of the caret this session typed, for
-    /// `LastWord.range` to clip to. Nil once the mirror has been emptied by a
-    /// key we could not account for: clipping to zero would refuse everything.
-    private func sessionExtent() -> Int? {
-        let mirror = tap.session.typed as NSString
-        return mirror.length > 0 ? mirror.length : nil
     }
 
     private func applyTyped(
