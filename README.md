@@ -13,4 +13,4 @@ Yes, this one is fully AI-generated (I'm not that proficient in swift) and no, I
 
 ## Contributing
 
-The app is MIT licensed, so you are free to fork it and do with it as you please. Or you can file an issue or a PR if you want the base app to get better. But be aware: I very consciously made it a utility that does one thin and one thing only and don't plan to turn it into a swiss-army knife of an app. So I will close all PRs and issues that I deem not relevant to the core functionality.
+The app is MIT licensed, so you are free to fork it and do with it as you please. Or you can file an issue or a PR if you want the base app to get better. But be aware: I very consciously made it a utility that does one thing and one thing only and don't plan to turn it into a swiss-army knife of an app. So I will close all PRs and issues that I deem not relevant to the core functionality.
