@@ -10,7 +10,9 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
     return FieldRewriter(
         settings: SettingsStore(defaults: defaults),
         session: TypingSession(),
-        reader: ScriptedField(showing: readings)
+        reader: ScriptedField(showing: readings),
+        writer: ScriptedWriter(),
+        wait: ImmediateWait()
     )
 }
 
