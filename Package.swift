@@ -29,5 +29,9 @@ let package = Package(
             name: "LayoutConversionTests",
             dependencies: ["LayoutConversion"]
         ),
+        .testTarget(
+            name: "KeyflipTests",
+            dependencies: ["Keyflip"]
+        ),
     ]
 )

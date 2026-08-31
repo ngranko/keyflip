@@ -9,13 +9,15 @@ final class ConvertController {
     private var maps: [String: LayoutMap] = [:]
     private var layoutObserver: AnyObject?
     private let rewriter: FieldRewriter
+    private let reader: FieldReader
 
-    private typealias Target = FieldRewriter.Target
+    typealias Target = FieldRewriter.Target
 
-    init(settings: SettingsStore, tap: EventTap) {
+    init(settings: SettingsStore, tap: EventTap, reader: FieldReader) {
         self.settings = settings
         self.tap = tap
-        self.rewriter = FieldRewriter(settings: settings, session: tap.session)
+        self.reader = reader
+        self.rewriter = FieldRewriter(settings: settings, session: tap.session, reader: reader)
     }
 
     func start() {
@@ -61,7 +63,7 @@ final class ConvertController {
             return
         }
 
-        let read = FieldAccess.read()
+        let read = reader.read()
         Permissions.promptIfAccessibilityLapsed(available: read.accessibilityAvailable)
 
         switch read {
@@ -76,16 +78,18 @@ final class ConvertController {
             // In-flight IME composition and secure input are designed to fail.
             DebugLog.event("field: blocked → silent")
         case .field(let snap):
+            let reading = snap.reading
             DebugLog.event(
-                "field: app=\(snap.app) role=\(snap.role) value=\(DebugLog.quote(snap.value)) " +
-                "sel=\(snap.selectedRange) selected=\(DebugLog.quote(snap.selectedText))"
+                "field: app=\(reading.app) role=\(reading.role) " +
+                "value=\(DebugLog.quote(reading.value)) " +
+                "sel=\(reading.selectedRange) selected=\(DebugLog.quote(reading.selectedText))"
             )
             convertField(snap, slotA: slotA, slotB: slotB)
         }
     }
 
     private func convertField(_ snap: FieldSnapshot, slotA: LayoutMap, slotB: LayoutMap) {
-        switch target(in: snap) {
+        switch target(in: snap.reading) {
         case .found(let target):
             apply(target, snapshot: snap, slotA: slotA, slotB: slotB)
         case .askTheMirror:
@@ -95,14 +99,14 @@ final class ConvertController {
                 return
             }
             // Terminals and Electron editors hand back an empty AXValue.
-            applyTyped(typed, in: snap.app, slotA: slotA, slotB: slotB)
+            applyTyped(typed, in: snap.reading.app, slotA: slotA, slotB: slotB)
         case .unusable:
             togglePair()
         }
     }
 
     /// What the field is good for this trigger.
-    private enum FieldTarget {
+    enum FieldTarget {
         /// A range the field and the typing mirror both stand behind.
         case found(Target)
         /// No range from the field; the mirror may still have one.
@@ -115,15 +119,15 @@ final class ConvertController {
     /// A non-empty selection always wins. Otherwise the last run of
     /// non-whitespace, and only while a typing session is live (ADR 0002) and
     /// agrees with the field about what is in front of the caret.
-    private func target(in snap: FieldSnapshot) -> FieldTarget {
-        if !snap.selectedText.isEmpty {
-            return .found(Target(text: snap.selectedText, range: snap.selectedRange))
+    func target(in reading: FieldReading) -> FieldTarget {
+        if !reading.selectedText.isEmpty {
+            return .found(Target(text: reading.selectedText, range: reading.selectedRange))
         }
-        if snap.selectedRange.length > 0 {
-            let range = FieldAccess.clamp(snap.selectedRange, in: snap.value)
+        if reading.selectedRange.length > 0 {
+            let range = FieldAccess.clamp(reading.selectedRange, in: reading.value)
             if range.length > 0 {
                 return .found(Target(
-                    text: (snap.value as NSString).substring(with: range),
+                    text: (reading.value as NSString).substring(with: range),
                     range: range
                 ))
             }
@@ -132,15 +136,15 @@ final class ConvertController {
         let mirror = tap.session.typed
         if let clash = LastWord.caretDisagreement(
             with: mirror,
-            in: snap.value,
-            caretUTF16: snap.selectedRange.location
+            in: reading.value,
+            caretUTF16: reading.selectedRange.location
         ) {
             // If the mirror's text is at the end of the field after all, the
             // caret is the liar but keystrokes still land, since they use the
             // real one — so drop ranges and keep the mirror. If it is nowhere in
             // the field, the field transformed what was typed (smart quotes) and
             // erasing by the mirror's count would eat text it never saw.
-            let mirrored = snap.value.hasSuffix(mirror)
+            let mirrored = reading.value.hasSuffix(mirror)
             DebugLog.event(
                 "caret disagrees with mirror: field \(DebugLog.quote(clash.field)) " +
                 "vs typed \(DebugLog.quote(clash.mirror)) → \(mirrored ? "keys" : "no rewrite")"
@@ -149,8 +153,8 @@ final class ConvertController {
         }
         if LastWord.hidesStartOfRun(
             from: mirror,
-            in: snap.value,
-            caretUTF16: snap.selectedRange.location
+            in: reading.value,
+            caretUTF16: reading.selectedRange.location
         ) {
             // Converting what the field shows would convert “(” to itself and
             // leave the word behind it (Cursor, 2026-08-27).
@@ -158,12 +162,12 @@ final class ConvertController {
             return .askTheMirror
         }
         guard let word = LastWord.range(
-            in: snap.value,
-            caretUTF16: snap.selectedRange.location,
+            in: reading.value,
+            caretUTF16: reading.selectedRange.location,
             sessionUTF16: sessionExtent()
         ) else { return .askTheMirror }
         return .found(Target(
-            text: (snap.value as NSString).substring(with: word.nsRange),
+            text: (reading.value as NSString).substring(with: word.nsRange),
             range: word.nsRange
         ))
     }
