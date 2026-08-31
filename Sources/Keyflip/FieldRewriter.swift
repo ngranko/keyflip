@@ -37,6 +37,7 @@ final class FieldRewriter {
 
     private let settings: SettingsStore
     private let session: TypingSession
+    private let reader: FieldReader
 
     /// Apps whose Accessibility writes were proven not to land (ADR 0007).
     /// Persisted, because the first trigger in an app that refuses is the one
@@ -58,9 +59,10 @@ final class FieldRewriter {
     private static let recoverDelay: TimeInterval = 0.15
     private static let recoverAttempts = 10
 
-    init(settings: SettingsStore, session: TypingSession) {
+    init(settings: SettingsStore, session: TypingSession, reader: FieldReader) {
         self.settings = settings
         self.session = session
+        self.reader = reader
         self.axWriteRefused = settings.axWriteRefused
     }
 
@@ -74,14 +76,14 @@ final class FieldRewriter {
         in snapshot: FieldSnapshot,
         then done: @escaping (Bool) -> Void
     ) {
-        if snapshot.selectedText == target.text,
+        if snapshot.reading.selectedText == target.text,
            typeOverSelection(target, as: output, in: snapshot, via: .userSelection)
         {
             done(true)
             return
         }
-        guard !axWriteRefused.contains(snapshot.app) else {
-            DebugLog.event("ax write known-refused in \(snapshot.app) → retype")
+        guard !axWriteRefused.contains(snapshot.reading.app) else {
+            DebugLog.event("ax write known-refused in \(snapshot.reading.app) → retype")
             done(retype(target, as: output, in: snapshot))
             return
         }
@@ -168,7 +170,7 @@ final class FieldRewriter {
         in snapshot: FieldSnapshot,
         then done: @escaping (Bool) -> Void
     ) {
-        noteRefusal(snapshot.app)
+        noteRefusal(snapshot.reading.app)
         retypeWhenFieldRecovers(target, as: output, in: snapshot, then: done)
     }
 
@@ -215,24 +217,25 @@ final class FieldRewriter {
 
     /// A fresh read of the field, or nil when it tells us less than the
     /// snapshot we already hold and so cannot be trusted to type into.
-    private func usable(
+    func usable(
         _ snapshot: FieldSnapshot,
         target: Target,
         logging: Bool
     ) -> FieldSnapshot? {
-        guard case .field(let fresh) = FieldAccess.read() else {
+        guard case .field(let snap) = reader.read() else {
             if logging { DebugLog.event("re-read: no field") }
             return nil
         }
+        let fresh = snap.reading
         if logging {
             DebugLog.event(
                 "re-read: app=\(fresh.app) value=\(DebugLog.quote(fresh.value)) " +
                 "sel=\(fresh.selectedRange) selected=\(DebugLog.quote(fresh.selectedText))"
             )
         }
-        guard fresh.app == snapshot.app else { return nil }
+        guard fresh.app == snapshot.reading.app else { return nil }
         if fresh.selectedText == target.text {
-            return fresh
+            return snap
         }
         // No selection to go on, so accept it only while the target is still
         // sitting exactly where we were about to write.
@@ -241,7 +244,7 @@ final class FieldRewriter {
               target.range.location + target.range.length <= value.length,
               value.substring(with: target.range) == target.text
         else { return nil }
-        return fresh
+        return snap
     }
 
     /// The rungs below a write, for a field that reads but will not take one.
@@ -267,7 +270,7 @@ final class FieldRewriter {
         else { return false }
         DebugLog.event("replace via \(rung.rawValue) ok=true")
         syncMirror(after: target.text, became: output)
-        settleKeys(expecting: output, in: snapshot.app)
+        settleKeys(expecting: output, in: snapshot.reading.app)
         return true
     }
 
@@ -290,7 +293,7 @@ final class FieldRewriter {
         guard KeyboardOutput.replace(deleting: erase, with: replacement) else { return false }
         DebugLog.event("replace via \(Rung.blindKeys.rawValue) erase=\(erase) ok=true")
         session.replaceTail(erase, with: replacement)
-        settleKeys(expecting: output, in: snapshot.app)
+        settleKeys(expecting: output, in: snapshot.reading.app)
         return true
     }
 
@@ -317,19 +320,19 @@ final class FieldRewriter {
     /// The keystroke paths are blind, so read the field back once and log only
     /// a disagreement: that line is the whole diagnosis for leftover text.
     private func auditKeys(expecting text: String, in app: String) {
-        guard case .field(let snap) = FieldAccess.read(),
+        guard case .field(let snap) = reader.read(),
               // A different app or field means this reads somewhere the rewrite
               // never went.
-              snap.app == app,
-              !snap.value.isEmpty,
-              !snap.value.contains(text),
+              snap.reading.app == app,
+              !snap.reading.value.isEmpty,
+              !snap.reading.value.contains(text),
               // Monaco answers with the trailing token rather than the whole
               // field: a readback contained *in* what we wrote is a truncated
               // read, not missing text.
-              !text.contains(snap.value)
+              !text.contains(snap.reading.value)
         else { return }
         DebugLog.event(
-            "keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(snap.value))"
+            "keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(snap.reading.value))"
         )
     }
 
