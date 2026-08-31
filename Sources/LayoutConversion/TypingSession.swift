@@ -115,6 +115,6 @@ extension TypingSession {
               let word = LastWord.range(in: typed, caretUTF16: (typed as NSString).length)
         else { return nil }
         let ns = typed as NSString
-        return (ns.substring(with: word.nsRange), ns.substring(from: word.nsRange.upperBound))
+        return (ns.substring(with: word), ns.substring(from: word.upperBound))
     }
 }

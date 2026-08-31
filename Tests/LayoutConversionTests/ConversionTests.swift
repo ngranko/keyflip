@@ -70,14 +70,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 
 @Test func votesPickFromSourceFromTheText() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "ффa",
         slotA: latin,
         slotB: cyr,
         currentSourceID: latin.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.fromSourceID == cyr.id)
@@ -87,14 +87,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 
 @Test func tieUsesCurrentSourceWhenItIsInThePair() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "11",
         slotA: latin,
         slotB: cyr,
         currentSourceID: latin.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.fromSourceID == latin.id)
@@ -104,25 +104,25 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 
 @Test func tieIsNoOpWhenCurrentSourceIsNotInThePair() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "11",
         slotA: latin,
         slotB: cyr,
         currentSourceID: "com.apple.keylayout.US"
     )
-    #expect(decision == .noOp)
+    #expect(converted == nil)
 }
 
 @Test func unmappedCharactersStay() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "ф👋ф",
         slotA: latin,
         slotB: cyr,
         currentSourceID: nil
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "a👋a")
@@ -130,14 +130,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 
 @Test func questionMarkRewritesWhenThePhysicalKeyDiffers() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "a?",
         slotA: latin,
         slotB: cyr,
         currentSourceID: latin.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "ф,")
@@ -145,14 +145,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 
 @Test func bangStaysWhenBothLayoutsShareTheKey() {
     let (latin, cyr) = latinCyrillicPair()
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "a!",
         slotA: latin,
         slotB: cyr,
         currentSourceID: latin.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "ф!")
@@ -167,14 +167,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 @Test func abcAndRussianPCRewriteTheWalkthroughWord() throws {
     let abc = try #require(liveMap(abcID), "ABC is not installed")
     let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "сщьзкурутышму",
         slotA: abc,
         slotB: rus,
         currentSourceID: abc.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.fromSourceID == rus.id)
@@ -185,14 +185,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 @Test func abcQuestionMarkBecomesCommaOnRussianPC() throws {
     let abc = try #require(liveMap(abcID), "ABC is not installed")
     let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "?",
         slotA: abc,
         slotB: rus,
         currentSourceID: abc.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == ",")
@@ -203,14 +203,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
     let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
     // macOS substitutes U+2019 as you type, so the field holds a character
     // that is on no layout. It still came off the '/э key.
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "\u{2019}njn",
         slotA: abc,
         slotB: rus,
         currentSourceID: abc.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "этот")
@@ -219,14 +219,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 @Test func straightApostropheIsUnaffectedByTheFolding() throws {
     let abc = try #require(liveMap(abcID), "ABC is not installed")
     let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "'njn",
         slotA: abc,
         slotB: rus,
         currentSourceID: abc.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "этот")
@@ -235,14 +235,14 @@ private func latinCyrillicPair() -> (LayoutMap, LayoutMap) {
 @Test func emDashIsLeftAloneRatherThanFoldedOntoTheHyphen() throws {
     let abc = try #require(liveMap(abcID), "ABC is not installed")
     let rus = try #require(liveMap(rusPCID), "Russian – PC is not installed")
-    let decision = PairConversion.convert(
+    let converted = PairConversion.convert(
         target: "njn \u{2014} vfufp",
         slotA: abc,
         slotB: rus,
         currentSourceID: abc.id
     )
-    guard case .rewrite(let conv) = decision else {
-        Issue.record("expected rewrite")
+    guard let conv = converted else {
+        Issue.record("expected a conversion")
         return
     }
     #expect(conv.output == "тот \u{2014} магаз")
