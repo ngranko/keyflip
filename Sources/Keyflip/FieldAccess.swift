@@ -3,33 +3,6 @@ import Carbon
 import Foundation
 import LayoutConversion
 
-struct FieldSnapshot {
-    var element: AXUIElement
-    /// Only for the log, and the first thing wanted in a bug report.
-    var app: String
-    var role: String
-    var value: String
-    var selectedRange: NSRange
-    var selectedText: String
-}
-
-/// What a trigger found under the caret. The cases carry the follow policy
-/// (ADR 0004): `field` converts, `noFocus` toggles, the rest are silent.
-enum FieldRead {
-    case field(FieldSnapshot)
-    case noFocus
-    case markedText
-    case secure
-    case unavailable
-
-    /// Whether the AX API answered at all. Every other case is a verdict about
-    /// the field; `unavailable` is a verdict about our own grant.
-    var accessibilityAvailable: Bool {
-        if case .unavailable = self { return false }
-        return true
-    }
-}
-
 enum FieldAccess {
     /// AX calls block on the target app's run loop. One second is already an
     /// eternity to hold a keystroke, so cap every element we touch.
@@ -54,12 +27,14 @@ enum FieldAccess {
             let contents = textContents(element)
             let role = string(element, kAXRoleAttribute as CFString) ?? "?"
             return .field(FieldSnapshot(
-                element: element,
-                app: focusedAppName(),
-                role: role,
-                value: contents.value,
-                selectedRange: contents.range,
-                selectedText: contents.selected
+                handle: .ax(element),
+                reading: FieldReading(
+                    app: focusedAppName(),
+                    role: role,
+                    value: contents.value,
+                    selectedRange: contents.range,
+                    selectedText: contents.selected
+                )
             ))
         }
     }
@@ -80,18 +55,20 @@ enum FieldAccess {
         range: NSRange,
         with newText: String
     ) -> WriteAttempt {
-        AXUIElementSetMessagingTimeout(snapshot.element, timeout)
+        guard let element = snapshot.handle.element else { return .declined }
+        let reading = snapshot.reading
+        AXUIElementSetMessagingTimeout(element, timeout)
         // Browser fields often have AXSelectedText and no AXValue. Nothing
         // that follows may clamp the write away against an empty value.
-        let hasValue = (snapshot.value as NSString).length > 0
-        let nsRange = hasValue ? clamp(range, in: snapshot.value) : range
+        let hasValue = (reading.value as NSString).length > 0
+        let nsRange = hasValue ? clamp(range, in: reading.value) : range
 
-        if !snapshot.selectedText.isEmpty || nsRange.length > 0,
-           writeOverSelection(snapshot.element, range: nsRange, hasValue: hasValue, with: newText)
+        if !reading.selectedText.isEmpty || nsRange.length > 0,
+           writeOverSelection(element, range: nsRange, hasValue: hasValue, with: newText)
         {
             return .wrote
         }
-        return writeWholeValue(snapshot, range: nsRange, hasValue: hasValue, with: newText)
+        return writeWholeValue(element, reading, range: nsRange, hasValue: hasValue, with: newText)
     }
 
     /// Put the target under a selection and write through `AXSelectedText`.
@@ -131,7 +108,8 @@ enum FieldAccess {
     /// the refusal to write past the target: anything wider belongs to the
     /// keystroke path, which touches only what it selects.
     private static func writeWholeValue(
-        _ snapshot: FieldSnapshot,
+        _ element: AXUIElement,
+        _ reading: FieldReading,
         range: NSRange,
         hasValue: Bool,
         with newText: String
@@ -140,8 +118,8 @@ enum FieldAccess {
             DebugLog.event("ax replace abort: empty AXValue, AXSelectedText failed")
             return .refused
         }
-        let value = snapshot.value as NSString
-        guard TextRange.spansEverything(range, in: snapshot.value) else {
+        let value = reading.value as NSString
+        guard TextRange.spansEverything(range, in: reading.value) else {
             DebugLog.event(
                 "ax value write declined: \(value.length - range.length) chars outside " +
                 "range=\(range) → retype"
@@ -149,11 +127,11 @@ enum FieldAccess {
             return .declined
         }
         let updated = value.replacingCharacters(in: range, with: newText)
-        guard set(snapshot.element, kAXValueAttribute as CFString, updated as CFString) else {
+        guard set(element, kAXValueAttribute as CFString, updated as CFString) else {
             DebugLog.event("ax set AXValue failed")
             return .refused
         }
-        _ = setRange(snapshot.element, caret(after: range, newText))
+        _ = setRange(element, caret(after: range, newText))
         return .wrote
     }
 
@@ -176,9 +154,10 @@ enum FieldAccess {
         wrote newText: String,
         over original: String
     ) -> WriteCheck {
-        let value = textContents(snapshot.element).value as NSString
+        guard let element = snapshot.handle.element else { return .unreadable }
+        let value = textContents(element).value as NSString
         guard value.length > 0 else { return .unreadable }
-        let before = snapshot.value as NSString
+        let before = snapshot.reading.value as NSString
         let wrote = (newText as NSString).length
         if slice(value, at: range.location, length: wrote) == newText {
             // The output being there does not prove the original left: an
@@ -202,18 +181,19 @@ enum FieldAccess {
     /// change — Monaco does. Reading the selection back is the whole point:
     /// without it we would type over a range the field never took.
     static func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool {
+        guard let element = snapshot.handle.element else { return false }
         // The user's own selection is usually already exactly the target — and
         // in apps that ignore programmatic selection (Slack) it is the only
         // selection we will ever get, so check before trying to set one.
-        if string(snapshot.element, kAXSelectedTextAttribute as CFString) == text {
+        if string(element, kAXSelectedTextAttribute as CFString) == text {
             return true
         }
         // A write the app refused can leave its selection in a state where the
         // first setRange is swallowed — Cursor takes the second. Retry once:
         // the readback is what makes this safe, and it is cheap.
         for _ in 0..<2 {
-            guard setRange(snapshot.element, range) else { continue }
-            if string(snapshot.element, kAXSelectedTextAttribute as CFString) == text {
+            guard setRange(element, range) else { continue }
+            if string(element, kAXSelectedTextAttribute as CFString) == text {
                 return true
             }
         }
@@ -224,9 +204,10 @@ enum FieldAccess {
     /// proven collapsed. A refused write can leave its selection behind, and
     /// one backspace against that eats the whole run.
     static func restoreCaret(_ snapshot: FieldSnapshot) -> Bool {
-        let caret = NSRange(location: snapshot.selectedRange.upperBound, length: 0)
-        _ = setRange(snapshot.element, caret)
-        guard let now = selectedRange(snapshot.element) else { return false }
+        guard let element = snapshot.handle.element else { return false }
+        let caret = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
+        _ = setRange(element, caret)
+        guard let now = selectedRange(element) else { return false }
         return now.length == 0
     }
 

@@ -52,6 +52,14 @@ _Avoid_: Focus, insertion point, caret position (alone)
 In-flight IME composition (underlined, not yet committed). A trigger during marked text is a no-op.
 _Avoid_: Selection, last word
 
+**Field reading**:
+What a trigger saw in the focused field — its owning app, role, text, caret and selection — as plain values, with no live Accessibility handle attached. Every decision about the target is made from a reading.
+_Avoid_: Snapshot, field state, AX value (when you mean this)
+
+**Field handle**:
+The live Accessibility element a reading came from. Only the write path dereferences it; a reading replayed in a test carries none, and writes against it decline.
+_Avoid_: Element, AXUIElement (when you mean the app-facing type), reference
+
 **Slot**:
 One of the two pickers for the pair (A or B). Each slot is one enabled keyboard layout; the two slots must differ.
 _Avoid_: Source A/B (when you mean the picker)

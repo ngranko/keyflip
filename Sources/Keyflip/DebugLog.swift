@@ -53,8 +53,17 @@ enum DebugLog {
         /// is reinstalled between most of them.
         private static let maxBytes = 1 << 20
 
+        /// Only Keyflip itself mirrors to disk. Every process on this machine
+        /// shares the one log, and a test run's lines are shaped exactly like
+        /// production events in the file read to diagnose real conversions —
+        /// the test host is `swiftpm-testing-helper`, whether it runs from the
+        /// bundle or from `swift run`. The in-memory ring still fills, so the
+        /// menu's log window still shows everything either way.
+        private static let isTheApp = ProcessInfo.processInfo.processName == "Keyflip"
+
         /// Touched only from `io`, which is serial.
         private lazy var handle: FileHandle? = {
+            guard Self.isTheApp else { return nil }
             let path = DebugLog.fileURL.path
             if FileManager.default.fileExists(atPath: path) {
                 Self.trim(path)
