@@ -48,6 +48,10 @@ _Avoid_: Buffer, snippet, last token (when you mean this)
 A stretch of character typing, including backspace and a trailing space, until a click in the field, a caret-moving key, a focus change, or paste. Last-word conversion is allowed only while this session is live.
 _Avoid_: Focus, insertion point, caret position (alone)
 
+**Typing mirror**:
+A best-effort copy of what the app received since the typing session began, built from the keystrokes the tap saw. The only witness in terminals and Electron editors, which answer Accessibility with an empty value. Empty whenever it cannot be trusted.
+_Avoid_: Buffer, history, echo, typed text (alone)
+
 **Marked text**:
 In-flight IME composition (underlined, not yet committed). A trigger during marked text is a no-op.
 _Avoid_: Selection, last word
