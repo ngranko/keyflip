@@ -102,6 +102,34 @@ import Testing
     #expect(LastWord.caretDisagreement(with: "abc", in: "abc", caretUTF16: 0) == nil)
 }
 
+// MARK: - A value that starts mid-run
+
+@Test func aValueHoldingOnlyTheTailOfWhatWasTypedHidesTheRun() {
+    // Cursor, 2026-08-27: Monaco resynced its textarea as “(” was typed and
+    // read back holding nothing else, so the run converted to itself and the
+    // word behind it was never touched.
+    #expect(LastWord.hidesStartOfRun(from: "Ищщдуфт(", in: "(", caretUTF16: 1))
+
+    // And the mirror is worth asking only while it knows more: the same run in
+    // both witnesses hides nothing.
+    #expect(!LastWord.hidesStartOfRun(from: "ghjgf", in: "ghjgf", caretUTF16: 5))
+    #expect(!LastWord.hidesStartOfRun(from: "", in: "ghjgf", caretUTF16: 5))
+}
+
+@Test func aRunTheFieldStartsAfterAWordBreakIsWhole() {
+    // The field puts a space in front of the run, so the run is all there is
+    // to convert — a mirror reaching back past that break has drifted, and
+    // erasing by its length would eat the word before.
+    #expect(!LastWord.hidesStartOfRun(from: "hello ghjgf", in: "say ghjgf", caretUTF16: 9))
+}
+
+@Test func aRunTheMirrorDoesNotEndInIsNotHidden() {
+    // The field got shorter on its own — cleared, or rewritten by an
+    // autocompletion. What it shows is not the tail of what was typed, so the
+    // field is the only witness left worth taking at its word.
+    #expect(!LastWord.hidesStartOfRun(from: "кудумфте", in: "relevant", caretUTF16: 8))
+}
+
 // MARK: - Whether a range is the whole field
 
 @Test func aRangeCoveringEverythingSpansTheValue() {

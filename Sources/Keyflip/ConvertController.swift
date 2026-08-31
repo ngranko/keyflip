@@ -174,6 +174,18 @@ final class ConvertController {
             )
             return mirrored ? .askTheMirror : .unusable
         }
+        if LastWord.hidesStartOfRun(
+            from: mirror,
+            in: snap.value,
+            caretUTF16: snap.selectedRange.location
+        ) {
+            // Cursor, 2026-08-27: the value read back as “(” while the line
+            // held “Ищщдуфт(”. The two agreed over that one character, so the
+            // caret check passed, and converting what the field showed changed
+            // nothing — the trigger followed the layout and left the word.
+            DebugLog.event("field shows only the tail of \(DebugLog.quote(mirror)) → keys")
+            return .askTheMirror
+        }
         guard let word = LastWord.range(
             in: snap.value,
             caretUTF16: snap.selectedRange.location,

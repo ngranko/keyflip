@@ -112,6 +112,34 @@ public enum LastWord {
         let tail = mirrorNS.substring(from: mirrorNS.length - overlap)
         return field == tail ? nil : (field: field, mirror: tail)
     }
+
+    /// Whether the field is showing the tail of a run whose start only the
+    /// mirror can see.
+    ///
+    /// Monaco resyncs its hidden textarea as the user types and can come back
+    /// holding just the trailing token: one “(” where the line reads
+    /// “Ищщдуфт(”. Nothing about that looks wrong — the run starts at the
+    /// value's first character, and over the one character the two witnesses
+    /// share they agree — so the caret check passes and the run converts to
+    /// itself, which is a trigger that silently did nothing.
+    ///
+    /// The tell is the mirror's own run reaching past where the value begins.
+    /// A run that genuinely got shorter, because the app cleared or rewrote
+    /// the field, does not end in what the field is showing, and taking the
+    /// field at its word is then the right answer.
+    public static func hidesStartOfRun(
+        from mirror: String,
+        in text: String,
+        caretUTF16: Int
+    ) -> Bool {
+        guard let visible = range(in: text, caretUTF16: caretUTF16),
+              visible.location == 0,
+              let typed = range(in: mirror, caretUTF16: (mirror as NSString).length)
+        else { return false }
+        let shown = (text as NSString).substring(with: visible.nsRange)
+        let whole = (mirror as NSString).substring(with: typed.nsRange)
+        return whole.count > shown.count && whole.hasSuffix(shown)
+    }
 }
 
 extension TextRange {
