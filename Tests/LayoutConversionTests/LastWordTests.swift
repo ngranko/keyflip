@@ -133,21 +133,22 @@ import Testing
 // MARK: - Whether a range is the whole field
 
 @Test func aRangeCoveringEverythingSpansTheValue() {
-    #expect(TextRange.spansEverything(NSRange(location: 0, length: 7), in: "кудуфыу"))
+    #expect(NSRange(location: 0, length: 7).spansEverything(in: "кудуфыу"))
 }
 
 @Test func paddingAroundTheRangeStillSpansTheValue() {
-    #expect(TextRange.spansEverything(NSRange(location: 1, length: 6), in: " cceofz \n"))
+    #expect(NSRange(location: 1, length: 6).spansEverything(in: " cceofz \n"))
 }
 
 @Test func textOutsideTheRangeDoesNotSpanTheValue() {
     // The 460-character Zen message: everything but the four-character target
     // is content a whole-value write would have to reproduce exactly.
-    #expect(!TextRange.spansEverything(NSRange(location: 446, length: 4), in: String(repeating: "a", count: 460)))
-    #expect(!TextRange.spansEverything(NSRange(location: 6, length: 5), in: "hello world"))
+    let message = String(repeating: "a", count: 460)
+    #expect(!NSRange(location: 446, length: 4).spansEverything(in: message))
+    #expect(!NSRange(location: 6, length: 5).spansEverything(in: "hello world"))
 }
 
 @Test func aRangeOutsideTheTextSpansNothing() {
-    #expect(!TextRange.spansEverything(NSRange(location: 5, length: 10), in: "hello"))
-    #expect(!TextRange.spansEverything(NSRange(location: -1, length: 2), in: "hello"))
+    #expect(!NSRange(location: 5, length: 10).spansEverything(in: "hello"))
+    #expect(!NSRange(location: -1, length: 2).spansEverything(in: "hello"))
 }

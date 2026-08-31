@@ -144,12 +144,7 @@ final class ConvertController {
     private func togglePair() {
         guard let pair = settings.pairIDs() else { return }
         let current = [InputSources.currentID(), InputSources.currentLayoutID()].compactMap { $0 }
-        let dest: String
-        if current.contains(pair.0) {
-            dest = pair.1
-        } else if current.contains(pair.1) {
-            dest = pair.0
-        } else {
+        guard let dest = PairFollow.chooseDestination(from: current, in: pair) else {
             DebugLog.event("toggle skipped: \(current) outside pair")
             return
         }
@@ -187,7 +182,7 @@ final class ConvertController {
         slotB: LayoutMap,
         via route: String = ""
     ) -> Conversion? {
-        guard case .rewrite(let conv) = PairConversion.convert(
+        guard let conv = PairConversion.convert(
             target: text,
             slotA: slotA,
             slotB: slotB,

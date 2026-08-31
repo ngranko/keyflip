@@ -1,17 +1,5 @@
 import Foundation
 
-public struct TextRange: Equatable, Sendable {
-    public var location: Int
-    public var length: Int
-
-    public init(location: Int, length: Int) {
-        self.location = location
-        self.length = length
-    }
-
-    public var nsRange: NSRange { NSRange(location: location, length: length) }
-}
-
 enum LastWord {
     /// The run of non-whitespace in front of the caret, clipped to the part of
     /// it `sessionUTF16` says this typing session put there. Nil takes the
@@ -24,7 +12,7 @@ enum LastWord {
         in text: String,
         caretUTF16: Int,
         sessionUTF16: Int? = nil
-    ) -> TextRange? {
+    ) -> NSRange? {
         let ns = text as NSString
         let caret = max(0, min(caretUTF16, ns.length))
         guard caret > 0 else { return nil }
@@ -55,7 +43,7 @@ enum LastWord {
         let from = sessionUTF16.map { max(startUTF16, caret - max(0, $0)) } ?? startUTF16
         let length = endUTF16 - from
         guard length > 0 else { return nil }
-        return TextRange(location: from, length: length)
+        return NSRange(location: from, length: length)
     }
 
     static func substring(
@@ -66,7 +54,7 @@ enum LastWord {
         guard let range = range(in: text, caretUTF16: caretUTF16, sessionUTF16: sessionUTF16) else {
             return nil
         }
-        return (text as NSString).substring(with: range.nsRange)
+        return (text as NSString).substring(with: range)
     }
 
     /// Whether the field and the typing mirror disagree about the text in front
@@ -113,29 +101,8 @@ enum LastWord {
               visible.location == 0,
               let typed = range(in: mirror, caretUTF16: (mirror as NSString).length)
         else { return false }
-        let shown = (text as NSString).substring(with: visible.nsRange)
-        let whole = (mirror as NSString).substring(with: typed.nsRange)
+        let shown = (text as NSString).substring(with: visible)
+        let whole = (mirror as NSString).substring(with: typed)
         return whole.count > shown.count && whole.hasSuffix(shown)
-    }
-}
-
-extension TextRange {
-    /// A range trimmed to what `text` actually holds.
-    public static func clamp(_ range: NSRange, in text: String) -> NSRange {
-        let len = (text as NSString).length
-        let loc = max(0, min(range.location, len))
-        let end = max(loc, min(range.location + range.length, len))
-        return NSRange(location: loc, length: end - loc)
-    }
-
-    /// Whether nothing but whitespace lies outside `range` — what a caller
-    /// asks before replacing a field wholesale.
-    public static func spansEverything(_ range: NSRange, in text: String) -> Bool {
-        let ns = text as NSString
-        guard range.location >= 0, range.length >= 0, range.upperBound <= ns.length else {
-            return false
-        }
-        return ns.substring(to: range.location).allSatisfy(\.isWhitespace)
-            && ns.substring(from: range.upperBound).allSatisfy(\.isWhitespace)
     }
 }

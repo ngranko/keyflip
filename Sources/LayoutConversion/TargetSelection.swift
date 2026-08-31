@@ -63,7 +63,7 @@ public enum TargetSelection {
             return Target(text: reading.selectedText, range: reading.selectedRange)
         }
         guard reading.selectedRange.length > 0 else { return nil }
-        let range = TextRange.clamp(reading.selectedRange, in: reading.value)
+        let range = reading.selectedRange.clamped(in: reading.value)
         guard range.length > 0 else { return nil }
         return Target(text: (reading.value as NSString).substring(with: range), range: range)
     }
@@ -95,8 +95,8 @@ public enum TargetSelection {
             sessionUTF16: extent(of: mirror)
         ) else { return askTheMirror(session, note: note) }
         return .field(Target(
-            text: (reading.value as NSString).substring(with: word.nsRange),
-            range: word.nsRange
+            text: (reading.value as NSString).substring(with: word),
+            range: word
         ))
     }
 

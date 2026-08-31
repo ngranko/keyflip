@@ -12,9 +12,25 @@ public struct Conversion: Equatable, Sendable {
     }
 }
 
-public enum ConversionDecision: Equatable, Sendable {
-    case rewrite(Conversion)
-    case noOp
+/// Where a trigger with no target follows to (ADR 0004).
+///
+/// The pair's other direction rule. Decided the same way conversion's is —
+/// from the sources handed in, never by asking the system mid-decision.
+public enum PairFollow {
+    /// The other slot when the current source is in the pair. Nil outside it,
+    /// where the trigger is a plain no-op rather than a toggle.
+    ///
+    /// `current` holds both the selected input source and the selected keyboard
+    /// layout, which disagree under an IME; slot A wins when both are in the
+    /// pair, so the answer does not depend on which one was asked first.
+    public static func chooseDestination(
+        from current: [String],
+        in pair: (String, String)
+    ) -> String? {
+        if current.contains(pair.0) { return pair.1 }
+        if current.contains(pair.1) { return pair.0 }
+        return nil
+    }
 }
 
 public enum PairConversion {
@@ -45,7 +61,7 @@ public enum PairConversion {
         slotA: LayoutMap,
         slotB: LayoutMap,
         currentSourceID: String?
-    ) -> ConversionDecision {
+    ) -> Conversion? {
         let chars = target.map(String.init)
         var votesA = 0
         var votesB = 0
@@ -71,7 +87,7 @@ public enum PairConversion {
             from = slotB
             dest = slotA
         } else {
-            return .noOp
+            return nil
         }
 
         var output = ""
@@ -82,10 +98,10 @@ public enum PairConversion {
                 output += ch
             }
         }
-        return .rewrite(Conversion(
+        return Conversion(
             fromSourceID: from.id,
             destinationID: dest.id,
             output: output
-        ))
+        )
     }
 }
