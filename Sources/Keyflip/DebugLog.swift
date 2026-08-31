@@ -48,10 +48,9 @@ enum DebugLog {
         private var lines: [String] = []
         private let io = DispatchQueue(label: "local.Keyflip.debuglog", qos: .utility)
 
-        /// The artifacts this log exists to explain show up once in a hundred
-        /// conversions, and the app is reinstalled between most of them.
-        /// Truncating at launch threw away the only record every time, so the
-        /// file is appended to and trimmed instead.
+        /// Appended and trimmed rather than truncated at launch: the artifacts
+        /// this log explains show up once in a hundred conversions, and the app
+        /// is reinstalled between most of them.
         private static let maxBytes = 1 << 20
 
         /// Touched only from `io`, which is serial.

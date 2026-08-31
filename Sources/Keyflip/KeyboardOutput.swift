@@ -1,16 +1,14 @@
 import CoreGraphics
 import Foundation
 
-/// Rewrites text by synthesizing keys instead of writing through
-/// Accessibility: N backspaces, then the replacement typed as Unicode.
+/// N backspaces, then the replacement typed as Unicode.
 ///
-/// This is the only path that reaches terminals and Electron editors, which
-/// render their own text and expose an empty `AXValue`. It is blind — it
-/// trusts `TypingSession.typed` to say what is on screen — so it is a fallback
-/// behind the Accessibility path, never the default.
+/// Blind — it trusts `TypingSession.typed` to say what is on screen — so it is
+/// the fallback behind the Accessibility path, and the only path that reaches
+/// a terminal.
 enum KeyboardOutput {
-    /// Stamped on every event we post so our own tap can ignore them.
-    /// Without this the synthesized keys would feed back into the mirror.
+    /// Stamped on every event we post, so our own tap can ignore them rather
+    /// than feed them back into the mirror.
     static let marker: Int64 = 0x4B59_464C_5000
 
     /// `keyboardSetUnicodeString` is reliable for short strings; chunk anything

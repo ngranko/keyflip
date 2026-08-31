@@ -4,14 +4,12 @@ import CoreGraphics
 import Foundation
 import LayoutConversion
 
-/// One filtering CGEvent tap drives everything: the trigger recognizer, the
-/// typing session, and the Set-trigger recorder.
+/// One filtering CGEvent tap drives the recognizer, the typing session, and
+/// the Set-trigger recorder.
 ///
-/// A filtering tap needs Accessibility, which the app already needs to read and
-/// write text, so there is no second NSEvent path to keep in sync — and
-/// `isActive` can mean the one thing that matters: the tap exists. Global
-/// NSEvent monitors are the trap here; they hand back a non-nil token even when
-/// the process is untrusted and will never deliver a keystroke.
+/// Not an NSEvent monitor: those hand back a non-nil token even when the
+/// process is untrusted and will never deliver a keystroke, so `isActive`
+/// could not mean anything.
 final class EventTap: @unchecked Sendable {
     var onTrigger: (() -> Void)?
 

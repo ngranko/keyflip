@@ -6,9 +6,9 @@ import Foundation
 enum Permissions {
     private static var promptedForThisLapse = false
 
-    /// Whether *this running binary* is on the Accessibility TCC list.
-    /// Do not probe AX here: reading our own menu can succeed without trust,
-    /// which hid the grant item while field reads still returned apiDisabled.
+    /// Whether *this running binary* is on the Accessibility TCC list. Do not
+    /// probe AX instead: reading our own menu succeeds without trust, which hid
+    /// the grant item while field reads returned apiDisabled.
     static var accessibilityTrusted: Bool {
         AXIsProcessTrusted()
     }
