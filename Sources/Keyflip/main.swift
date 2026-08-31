@@ -12,7 +12,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         settings = SettingsStore()
         tap = EventTap(trigger: settings.trigger, interval: NSEvent.doubleClickInterval)
-        convert = ConvertController(settings: settings, tap: tap, reader: AXFieldReader())
+        let reader = AXFieldReader()
+        convert = ConvertController(
+            settings: settings,
+            tap: tap,
+            reader: reader,
+            rewriter: FieldRewriter(
+                settings: settings,
+                session: tap.session,
+                reader: reader,
+                writer: AXFieldWriter(),
+                wait: MainQueueWait()
+            )
+        )
         convert.start()
         status = StatusItemController(settings: settings, convert: convert, tap: tap)
 

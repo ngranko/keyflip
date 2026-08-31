@@ -33,6 +33,8 @@ final class FieldRewriter {
     private let settings: SettingsStore
     private let session: TypingSession
     private let reader: FieldReader
+    private let writer: FieldWriter
+    private let wait: Wait
 
     /// Apps whose Accessibility writes were proven not to land (ADR 0007).
     /// Persisted, because the first trigger in an app that refuses is the one
@@ -45,7 +47,7 @@ final class FieldRewriter {
     private static let confirmInterval: TimeInterval = 0.03
 
     /// Synthesized keystrokes are applied on the app's own run loop, so
-    /// `KeyboardOutput.replace` returning true says nothing about the screen.
+    /// `typeKeys` returning true says nothing about the screen.
     private static let keySettle: TimeInterval = 0.2
 
     /// Monaco recovers from a refused write on its own, but not quickly: 250ms
@@ -54,10 +56,18 @@ final class FieldRewriter {
     private static let recoverDelay: TimeInterval = 0.15
     private static let recoverAttempts = 10
 
-    init(settings: SettingsStore, session: TypingSession, reader: FieldReader) {
+    init(
+        settings: SettingsStore,
+        session: TypingSession,
+        reader: FieldReader,
+        writer: FieldWriter,
+        wait: Wait
+    ) {
         self.settings = settings
         self.session = session
         self.reader = reader
+        self.writer = writer
+        self.wait = wait
         self.axWriteRefused = settings.axWriteRefused
     }
 
@@ -82,7 +92,7 @@ final class FieldRewriter {
             done(retype(target, as: output, in: snapshot))
             return
         }
-        switch FieldAccess.replace(snapshot, range: target.range, with: output) {
+        switch writer.replace(snapshot, range: target.range, with: output) {
         case .wrote:
             confirm(target, output: output, in: snapshot, attempt: 0, then: done)
         case .refused:
@@ -103,7 +113,7 @@ final class FieldRewriter {
     ) -> Bool {
         let erase = target.text.count + target.trailing.count
         let replacement = output + target.trailing
-        let ok = KeyboardOutput.replace(deleting: erase, with: replacement)
+        let ok = writer.typeKeys(deleting: erase, with: replacement)
         DebugLog.event("\(Rung.blindKeys.rawValue): erase=\(erase) ok=\(ok)")
         guard ok else { return false }
         session.replaceTail(erase, with: replacement)
@@ -118,7 +128,7 @@ final class FieldRewriter {
         attempt: Int,
         then done: @escaping (Bool) -> Void
     ) {
-        let check = FieldAccess.verify(
+        let check = writer.verify(
             snapshot,
             range: target.range,
             wrote: output,
@@ -260,8 +270,8 @@ final class FieldRewriter {
         in snapshot: FieldSnapshot,
         via rung: Rung
     ) -> Bool {
-        guard FieldAccess.select(snapshot, range: target.range, expecting: target.text),
-              KeyboardOutput.replace(deleting: 0, with: output)
+        guard writer.select(snapshot, range: target.range, expecting: target.text),
+              writer.typeKeys(deleting: 0, with: output)
         else { return false }
         DebugLog.event("replace via \(rung.rawValue) ok=true")
         syncMirror(after: target.text, became: output)
@@ -279,13 +289,13 @@ final class FieldRewriter {
             return false
         }
         // Deleting by count against a stale selection would eat the whole run.
-        guard FieldAccess.restoreCaret(snapshot) else {
+        guard writer.restoreCaret(snapshot) else {
             DebugLog.event("keys skipped: caret not collapsed")
             return false
         }
         let erase = typed.text.count + typed.trailing.count
         let replacement = output + typed.trailing
-        guard KeyboardOutput.replace(deleting: erase, with: replacement) else { return false }
+        guard writer.typeKeys(deleting: erase, with: replacement) else { return false }
         DebugLog.event("replace via \(Rung.blindKeys.rawValue) erase=\(erase) ok=true")
         session.replaceTail(erase, with: replacement)
         settleKeys(expecting: output, in: snapshot.reading.app)
@@ -306,7 +316,7 @@ final class FieldRewriter {
     /// owner and no caller has to reason about when to clear it.
     private func holdTrigger(for delay: TimeInterval, then work: @escaping () -> Void) {
         pendingWaits += 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        wait.after(delay) { [weak self] in
             self?.pendingWaits -= 1
             work()
         }

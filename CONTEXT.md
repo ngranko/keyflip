@@ -64,6 +64,10 @@ _Avoid_: Snapshot, field state, AX value (when you mean this)
 The live Accessibility element a reading came from. Only the write path dereferences it; a reading replayed in a test carries none, and writes against it decline.
 _Avoid_: Element, AXUIElement (when you mean the app-facing type), reference
 
+**Rung**:
+One way of getting a conversion into the field, tried in a fixed order: typing over the user's own selection, an Accessibility write, a selection the app set and typed over, then backspaces counted from the typing mirror. Each assumes more about the app than the one above it.
+_Avoid_: Strategy, fallback, attempt, method
+
 **Slot**:
 One of the two pickers for the pair (A or B). Each slot is one enabled keyboard layout; the two slots must differ.
 _Avoid_: Source A/B (when you mean the picker)

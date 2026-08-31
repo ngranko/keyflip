@@ -44,7 +44,7 @@ enum FieldAccess {
     /// reached past the target. Recording a decline in `axWriteRefused`, which
     /// is persisted, would send every later conversion there down the blind
     /// path.
-    enum WriteAttempt {
+    enum WriteAttempt: Equatable {
         case wrote
         case refused
         case declined
@@ -141,7 +141,7 @@ enum FieldAccess {
     /// Four-way, because "did not read back as expected" hides two opposites:
     /// a field that will not read back at all is safe to assume applied, while
     /// one reading back as neither text has taken something with the write.
-    enum WriteCheck {
+    enum WriteCheck: Equatable {
         case applied
         case unchanged
         case unreadable

@@ -16,8 +16,18 @@ final class ScriptedField: FieldReader {
         reads = readings.map { .field(FieldSnapshot(handle: .none, reading: $0)) }
     }
 
+    /// A field that answers the same way however often it is asked, for the
+    /// paths that re-read while polling.
+    init(always reading: FieldReading) {
+        repeating = .field(FieldSnapshot(handle: .none, reading: reading))
+        reads = []
+    }
+
+    private var repeating: FieldRead?
+
     func read() -> FieldRead {
-        reads.isEmpty ? .noFocus : reads.removeFirst()
+        if let repeating { return repeating }
+        return reads.isEmpty ? .noFocus : reads.removeFirst()
     }
 }
 
