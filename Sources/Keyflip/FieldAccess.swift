@@ -61,7 +61,7 @@ enum FieldAccess {
         // Browser fields often have AXSelectedText and no AXValue. Nothing
         // that follows may clamp the write away against an empty value.
         let hasValue = (reading.value as NSString).length > 0
-        let nsRange = hasValue ? clamp(range, in: reading.value) : range
+        let nsRange = hasValue ? TextRange.clamp(range, in: reading.value) : range
 
         if !reading.selectedText.isEmpty || nsRange.length > 0,
            writeOverSelection(element, range: nsRange, hasValue: hasValue, with: newText)
@@ -327,7 +327,7 @@ enum FieldAccess {
         if range.length > 0, let slice = stringForRange(element, range), !slice.isEmpty {
             return slice
         }
-        let clamped = clamp(range, in: value)
+        let clamped = TextRange.clamp(range, in: value)
         guard clamped.length > 0 else { return "" }
         return (value as NSString).substring(with: clamped)
     }
@@ -373,13 +373,6 @@ enum FieldAccess {
     }
 
     /// A range the field will accept: inside the text, never inverted.
-    static func clamp(_ range: NSRange, in text: String) -> NSRange {
-        let len = (text as NSString).length
-        let loc = max(0, min(range.location, len))
-        let end = max(loc, min(range.location + range.length, len))
-        return NSRange(location: loc, length: end - loc)
-    }
-
     private static func copy(_ element: AXUIElement, _ attr: CFString) -> AnyObject? {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(element, attr, &value) == .success else { return nil }

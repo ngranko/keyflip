@@ -1,5 +1,5 @@
 import Foundation
-import LayoutConversion
+@testable import LayoutConversion
 import Testing
 
 @Test func lastRunSkipsTrailingSpace() {

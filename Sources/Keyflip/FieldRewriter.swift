@@ -6,11 +6,6 @@ import LayoutConversion
 /// `Rung` runs is decided by what the app does, never by what it says.
 @MainActor
 final class FieldRewriter {
-    struct Target {
-        var text: String
-        var range: NSRange
-    }
-
     /// How the conversion got in. Declared in the order the rungs are tried:
     /// each assumes more about the app than the one above it, and each is
     /// reached only once the ones above are ruled out.
