@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The tap only fails for one reason worth handling: no Accessibility.
         // Nag (ADR 0004), then keep trying so the grant takes effect without a
         // relaunch — TCC lets a running process create the tap once trusted.
-        Permissions.promptOnceThisLaunch()
+        Permissions.promptIfAccessibilityLapsed(available: false)
         retryTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.tap.start() else { return }

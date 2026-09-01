@@ -4,7 +4,7 @@ import Foundation
 
 @MainActor
 enum Permissions {
-    private static var promptedThisLaunch = false
+    private static var promptedForThisLapse = false
 
     /// Whether *this running binary* is on the Accessibility TCC list.
     /// Do not probe AX here: reading our own menu can succeed without trust,
@@ -17,13 +17,24 @@ enum Permissions {
         Bundle.main.bundlePath
     }
 
-    /// ADR 0004: the prompt is not one-shot. Without Accessibility the event
-    /// tap cannot even be created, so ask once per launch — every launch —
-    /// rather than failing forever in silence. The system dialog carries its
-    /// own "Open System Settings" button, so do not also yank the pane forward.
-    static func promptOnceThisLaunch() {
-        guard !accessibilityTrusted, !promptedThisLaunch else { return }
-        promptedThisLaunch = true
+    /// ADR 0004: the prompt is not one-shot. Without Accessibility nothing
+    /// works, so ask rather than fail forever in silence. The system dialog
+    /// carries its own "Open System Settings" button, so do not also yank the
+    /// pane forward.
+    ///
+    /// A lapse arms it, not a launch. Rebuilding the ad-hoc-signed bundle
+    /// revokes the grant of the *running* app, and the tap it created while
+    /// trusted keeps delivering triggers, so the first failure can land hours
+    /// after the launch prompt was spent — and every trigger after it would be
+    /// silent. What the API just did is the signal, not `AXIsProcessTrusted()`:
+    /// that is a second opinion on the question, and not the one that failed.
+    static func promptIfAccessibilityLapsed(available: Bool) {
+        guard !available else {
+            promptedForThisLapse = false
+            return
+        }
+        guard !promptedForThisLapse else { return }
+        promptedForThisLapse = true
         prompt()
     }
 
