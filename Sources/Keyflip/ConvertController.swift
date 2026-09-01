@@ -84,17 +84,18 @@ final class ConvertController {
             return
         }
 
-        switch FieldAccess.read() {
+        let read = FieldAccess.read()
+        Permissions.promptIfAccessibilityLapsed(available: read.accessibilityAvailable)
+
+        switch read {
         case .noFocus:
             // Nothing focused is not an AX failure, it is the plainest "no
             // target" there is: the trigger still toggles the pair.
             DebugLog.event("field: no focus → toggle")
             togglePair()
         case .unavailable:
-            // ADR 0004: a permission failure neither converts nor follows —
-            // but it is the one failure worth nagging about.
+            // ADR 0004: a permission failure neither converts nor follows.
             DebugLog.event("field: accessibility unavailable → silent")
-            Permissions.promptOnceThisLaunch()
         case .markedText, .secure:
             // In-flight IME composition and secure input are designed to fail.
             DebugLog.event("field: blocked → silent")

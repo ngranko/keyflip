@@ -22,6 +22,13 @@ enum FieldRead {
     case markedText
     case secure
     case unavailable
+
+    /// Whether the AX API answered at all. Every other case is a verdict about
+    /// the field; `unavailable` is a verdict about our own grant.
+    var accessibilityAvailable: Bool {
+        if case .unavailable = self { return false }
+        return true
+    }
 }
 
 enum FieldAccess {
