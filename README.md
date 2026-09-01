@@ -7,7 +7,7 @@
 
 ## About
 
-I was really tired that all switchers that I've tried worked like shit (crashing, switching to wrong symbols, swallowing my keypresses, you get the picture), so here we are, now we have n+1 competing switcher apps.
+I was really tired that all switchers that I'd tried worked like shit (crashing, switching to wrong symbols, swallowing my keypresses, you get the picture), so here we are, now we have n+1 competing switcher apps.
 
 Yes, this one is fully AI-generated (I'm not that proficient in swift) and no, I don't plan to get any money out of it. I've created it just to fix my personal pain point. If it helps anyone else – cool, if someone decides to improve it – even better (although please read the Contributing section beforehand).
 
