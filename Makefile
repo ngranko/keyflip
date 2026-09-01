@@ -3,7 +3,14 @@ APP := .build/Keyflip.app
 ZIP := Keyflip.zip
 BIN := $(shell $(SWIFT) build -c release --show-bin-path)/Keyflip
 
-.PHONY: test build app run install clean icon glass zip archive
+# TCC pins the Accessibility grant to whatever identity signed the bundle, so a
+# stable certificate keeps the grant across rebuilds where ad-hoc signing re-pins
+# it to each new cdhash. Falls back to ad-hoc so a fork without the cert builds.
+# See docs/signing.md.
+SIGN_ID ?= Keyflip Self-Signed
+IDENTITY = $(shell security find-identity -p codesigning | grep -qF "$(SIGN_ID)" && echo "$(SIGN_ID)" || echo -)
+
+.PHONY: test build app sign run install clean icon glass zip archive
 
 test:
 	$(SWIFT) test
@@ -21,7 +28,12 @@ app: build
 		cp App/Keyflip.icns $(APP)/Contents/Resources/Keyflip.icns; \
 	fi
 	printf 'APPL????' > $(APP)/Contents/PkgInfo
-	codesign --force --sign - --identifier local.Keyflip --timestamp=none $(APP)
+	@$(MAKE) --no-print-directory sign
+
+# Its own target so `app` and `glass` cannot drift into signing differently.
+sign:
+	@[ "$(IDENTITY)" != "-" ] || echo 'warning: no "$(SIGN_ID)" identity in the keychain; signing ad-hoc, which drops the Accessibility grant on every build'
+	codesign --force --sign "$(IDENTITY)" --identifier local.Keyflip --timestamp=none $(APP)
 
 run: app
 	open $(APP)
@@ -43,7 +55,7 @@ glass: app
 		--output-partial-info-plist .build/icon/partial.plist >/dev/null
 	cp .build/icon/Assets.car $(APP)/Contents/Resources/Assets.car
 	plutil -replace CFBundleIconName -string Keyflip $(APP)/Contents/Info.plist
-	codesign --force --sign - --identifier local.Keyflip --timestamp=none $(APP)
+	@$(MAKE) --no-print-directory sign
 
 # Zip the built bundle to $(ZIP) in the repo root. ditto (not zip) so the
 # symlinks and xattrs the code signature depends on survive the archive.
