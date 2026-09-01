@@ -56,15 +56,19 @@ struct AXFieldWriter: FieldWriter {
     }
 }
 
-/// When the rewriter's waits elapse. The app waits on the main queue, where a
+/// When the rewriter's waits elapse. The app waits on the main actor, where a
 /// rewrite has to settle in real time; a test runs the work at once, so a
 /// ten-step recovery poll costs nothing to exercise.
+@MainActor
 protocol Wait {
     func after(_ delay: TimeInterval, then work: @escaping () -> Void)
 }
 
-struct MainQueueWait: Wait {
+struct MainActorWait: Wait {
     func after(_ delay: TimeInterval, then work: @escaping () -> Void) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        Task {
+            try? await Task.sleep(for: .seconds(delay))
+            work()
+        }
     }
 }
