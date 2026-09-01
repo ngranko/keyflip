@@ -5,7 +5,7 @@ import LayoutConversion
 final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private let statusItem: NSStatusItem
     private let settings: SettingsStore
-    private let convert: ConvertController
+    private let pair: Pair
     private let tap: EventTap
     private var recordPanel: NSPanel?
     private var pairView: PairColumnsView?
@@ -21,9 +21,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     /// "Missing bounds rectangle for Keyflip".
     private static let autosaveName = "Keyflip"
 
-    init(settings: SettingsStore, convert: ConvertController, tap: EventTap) {
+    init(settings: SettingsStore, pair: Pair, tap: EventTap) {
         self.settings = settings
-        self.convert = convert
+        self.pair = pair
         self.tap = tap
         Self.adoptLegacyPosition()
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -68,7 +68,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         menuIsOpen = true
         tap.session.end()
         cancelRecording()
-        convert.reloadMaps()
+        pair.reloadFromSystem()
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -105,18 +105,16 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private func addPair(to menu: NSMenu) {
         menu.addItem(Self.header("Pair"))
         let pairView = PairColumnsView(
-            layouts: InputSources.enabledKeyboardLayouts(),
-            slotA: settings.slotA,
-            slotB: settings.slotB,
+            layouts: pair.enabledLayouts,
+            slotA: pair.slotA,
+            slotB: pair.slotB,
             onPickA: { [weak self] id in
-                self?.settings.setSlotA(id)
-                self?.convert.reloadMaps()
-                self?.pairView?.apply(slotA: id, slotB: self?.settings.slotB)
+                self?.pair.chooseSlotA(id)
+                self?.pairView?.apply(slotA: id, slotB: self?.pair.slotB)
             },
             onPickB: { [weak self] id in
-                self?.settings.setSlotB(id)
-                self?.convert.reloadMaps()
-                self?.pairView?.apply(slotA: self?.settings.slotA, slotB: id)
+                self?.pair.chooseSlotB(id)
+                self?.pairView?.apply(slotA: self?.pair.slotA, slotB: id)
             }
         )
         self.pairView = pairView
