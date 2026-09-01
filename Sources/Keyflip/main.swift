@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 session: tap.session,
                 reader: reader,
                 writer: AXFieldWriter(),
-                wait: MainQueueWait()
+                wait: MainActorWait()
             )
         )
         convert.start()
