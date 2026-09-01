@@ -110,15 +110,21 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             slotB: pair.slotB,
             onPickA: { [weak self] id in
                 self?.pair.chooseSlotA(id)
-                self?.pairView?.apply(slotA: id, slotB: self?.pair.slotB)
+                self?.showChosenSlots()
             },
             onPickB: { [weak self] id in
                 self?.pair.chooseSlotB(id)
-                self?.pairView?.apply(slotA: self?.pair.slotA, slotB: id)
+                self?.showChosenSlots()
             }
         )
         self.pairView = pairView
         menu.addItem(Self.item(hosting: pairView))
+    }
+
+    /// The pair decides what a pick means — a slot can refuse one — so the
+    /// columns are told what the pair holds, not what was clicked.
+    private func showChosenSlots() {
+        pairView?.apply(slotA: pair.slotA, slotB: pair.slotB)
     }
 
     private func addPills(to menu: NSMenu) {
