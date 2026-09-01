@@ -46,15 +46,16 @@ public enum LayoutMapBuilder {
         name: String,
         layout: UnsafePointer<UCKeyboardLayout>
     ) -> LayoutMap {
-        let shift = KeyStroke.shiftMods
-        let layers: [(UInt32, Int)] = [(0, 0), (shift, 1)]
+        let layers: [UInt32] = [0, KeyStroke.shiftMods]
         let mainKeys = (UInt16(0)..<128).filter { !keypad.contains($0) }
         let padKeys = (UInt16(0)..<128).filter { keypad.contains($0) }
 
         var reverse: [String: KeyStroke] = [:]
         var forward: [KeyStroke: String] = [:]
+        // Main keys first, so a character that sits on both wins from the one
+        // the user actually types it on rather than from the keypad.
         for key in mainKeys + padKeys {
-            for (mods, _) in layers {
+            for mods in layers {
                 guard let s = translate(layout, key: key, mods: mods), !s.isEmpty else { continue }
                 let stroke = KeyStroke(key: key, mods: mods)
                 if reverse[s] == nil {

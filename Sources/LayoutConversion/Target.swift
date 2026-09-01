@@ -13,18 +13,13 @@ public struct TextRange: Equatable, Sendable {
 }
 
 public enum LastWord {
-    /// The run of non-whitespace in front of the caret, optionally clipped to
-    /// the part of it the current typing session put there.
+    /// The run of non-whitespace in front of the caret, clipped to the part of
+    /// it `sessionUTF16` says this typing session put there. Nil takes the
+    /// whole run.
     ///
-    /// A run can straddle a session boundary: type half of a word, leave the
-    /// field, come back and finish it in the wrong layout. Converting the whole
-    /// run then rewrites text that was already right — and because from-source
-    /// is decided by a vote, a longer correct prefix drags the whole word into
-    /// the wrong layout, which is worse than not converting at all.
-    ///
-    /// `sessionUTF16` is how much this session typed. Pass nil to take the
-    /// whole run, which is all that can be done when the session's extent is
-    /// not known.
+    /// Clipping matters because from-source is decided by a vote: a run that
+    /// straddles a session boundary carries a correct prefix long enough to
+    /// drag the whole word into the wrong layout.
     public static func range(
         in text: String,
         caretUTF16: Int,
@@ -55,9 +50,8 @@ public enum LastWord {
 
         let startUTF16 = prefix[..<start].utf16.count
         let endUTF16 = prefix[..<end].utf16.count
-        // Never reach back past where the session began. A mirror longer than
-        // the text in front of the caret has drifted, and max() leaves the run
-        // whole rather than trusting it.
+        // A mirror longer than the text in front of the caret has drifted;
+        // max() leaves the run whole rather than reaching back past its start.
         let from = sessionUTF16.map { max(startUTF16, caret - max(0, $0)) } ?? startUTF16
         let length = endUTF16 - from
         guard length > 0 else { return nil }
@@ -75,25 +69,16 @@ public enum LastWord {
         return (text as NSString).substring(with: range.nsRange)
     }
 
-    /// Whether the field and the typing mirror tell the same story about the
-    /// text in front of the caret. Nil when they agree; both readings when
-    /// they do not.
+    /// Whether the field and the typing mirror disagree about the text in front
+    /// of the caret. Nil when they agree; both readings when they do not.
     ///
-    /// They can only disagree if one of them is wrong, and the caret is the
-    /// usual culprit. Zen reports `AXSelectedTextRange` offsets that run behind
-    /// its own `AXValue` in a multi-line field — ten short, in the case that
-    /// found this — so a caret sitting at the end of the text arrives pointing
-    /// into a word the user finished minutes ago. Converting there rewrites
-    /// text nobody touched, and `sessionUTF16` makes it worse rather than
-    /// better: it carries the right width to the wrong place, clipping a
-    /// bystander word to the length of the word that should have been
-    /// converted.
+    /// The caret is the usual liar: Zen reports `AXSelectedTextRange` offsets
+    /// that run behind its own `AXValue` in a multi-line field — ten short, in
+    /// the case that found this — so a caret sitting at the end of the text
+    /// arrives pointing into a word finished minutes ago.
     ///
-    /// An empty mirror agrees with everything — it is the "no opinion" case,
-    /// not a contradiction, and so is a field with nothing in front of the
-    /// caret to read. A mirror longer than the text in front of the caret is
-    /// compared over the overlap, which is all a field with a truncated
-    /// `AXValue` can offer.
+    /// An empty mirror, or nothing in front of the caret, is no opinion rather
+    /// than a contradiction. A longer mirror is compared over the overlap.
     public static func caretDisagreement(
         with mirror: String,
         in text: String,
@@ -104,29 +89,21 @@ public enum LastWord {
         let ns = text as NSString
         let caret = max(0, min(caretUTF16, ns.length))
         let overlap = min(mirrorNS.length, caret)
-        // Nothing to compare is not a contradiction. A field that reads back
-        // empty — a terminal, an Electron editor — has no opinion about the
-        // caret, and the mirror is meant to be the only witness there.
         guard overlap > 0 else { return nil }
         let field = ns.substring(with: NSRange(location: caret - overlap, length: overlap))
         let tail = mirrorNS.substring(from: mirrorNS.length - overlap)
         return field == tail ? nil : (field: field, mirror: tail)
     }
 
-    /// Whether the field is showing the tail of a run whose start only the
+    /// Whether the field is showing only the tail of a run whose start just the
     /// mirror can see.
     ///
-    /// Monaco resyncs its hidden textarea as the user types and can come back
-    /// holding just the trailing token: one “(” where the line reads
-    /// “Ищщдуфт(”. Nothing about that looks wrong — the run starts at the
-    /// value's first character, and over the one character the two witnesses
-    /// share they agree — so the caret check passes and the run converts to
-    /// itself, which is a trigger that silently did nothing.
-    ///
-    /// The tell is the mirror's own run reaching past where the value begins.
-    /// A run that genuinely got shorter, because the app cleared or rewrote
-    /// the field, does not end in what the field is showing, and taking the
-    /// field at its word is then the right answer.
+    /// Monaco resyncs its hidden textarea mid-word and can come back holding
+    /// one “(” where the line reads “Ищщдуфт(”. Both witnesses agree over the
+    /// character they share, so the caret check passes and the run converts to
+    /// itself. The tell is the mirror's run reaching past where the value
+    /// begins — a run that genuinely got shorter does not end in what the
+    /// field shows.
     public static func hidesStartOfRun(
         from mirror: String,
         in text: String,
@@ -143,12 +120,8 @@ public enum LastWord {
 }
 
 extension TextRange {
-    /// Whether a range is the whole of what the text says, give or take
-    /// whitespace around it.
-    ///
-    /// The question a caller asks before replacing a field wholesale: if
-    /// nothing but padding lies outside the range, there is nothing outside
-    /// the range to lose.
+    /// Whether nothing but whitespace lies outside `range` — what a caller
+    /// asks before replacing a field wholesale.
     public static func spansEverything(_ range: NSRange, in text: String) -> Bool {
         let ns = text as NSString
         guard range.location >= 0, range.length >= 0, range.upperBound <= ns.length else {

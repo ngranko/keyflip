@@ -38,12 +38,9 @@ final class SettingsStore: @unchecked Sendable {
         }
     }
 
-    /// Apps proven to discard Accessibility writes.
-    ///
-    /// Learned once and kept. An app does not change its mind between
-    /// launches, and re-learning it costs a failed conversion on the first
-    /// trigger of every launch — which, for anyone rebuilding the app, is
-    /// most of the conversions they attempt.
+    /// Apps proven to discard Accessibility writes. Kept across launches: an
+    /// app does not change its mind, and re-learning costs a failed conversion
+    /// on the first trigger every time.
     var axWriteRefused: Set<String> {
         get { Set(defaults.stringArray(forKey: Key.axWriteRefused) ?? []) }
         set { defaults.set(newValue.sorted(), forKey: Key.axWriteRefused) }

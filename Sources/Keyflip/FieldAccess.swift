@@ -5,8 +5,7 @@ import LayoutConversion
 
 struct FieldSnapshot {
     var element: AXUIElement
-    /// Only for the log — which app a field belongs to is the first thing you
-    /// want when someone reports "it does not work here".
+    /// Only for the log, and the first thing wanted in a bug report.
     var app: String
     var role: String
     var value: String
@@ -65,14 +64,11 @@ enum FieldAccess {
         }
     }
 
-    /// What came of a write, which is three things and not two.
-    ///
-    /// "It did not happen" hides a refusal — the app was asked and said no,
-    /// which is worth remembering about the app — and a decline, where the
-    /// only write left was broader than the target and we would not make it.
-    /// A decline says nothing about the app and must not be recorded against
-    /// it: `axWriteRefused` is persisted, and one field we chose not to
-    /// overwrite would send every later conversion there down the blind path.
+    /// Three outcomes, not two: a refusal is the app saying no and is worth
+    /// remembering against it, while a decline is us not making a write that
+    /// reached past the target. Recording a decline in `axWriteRefused`, which
+    /// is persisted, would send every later conversion there down the blind
+    /// path.
     enum WriteAttempt {
         case wrote
         case refused
@@ -85,82 +81,88 @@ enum FieldAccess {
         with newText: String
     ) -> WriteAttempt {
         AXUIElementSetMessagingTimeout(snapshot.element, timeout)
-        let value = snapshot.value as NSString
-        let canClamp = value.length > 0
-        let nsRange = canClamp ? clamp(range, in: snapshot.value) : range
+        // Browser fields often have AXSelectedText and no AXValue. Nothing
+        // that follows may clamp the write away against an empty value.
+        let hasValue = (snapshot.value as NSString).length > 0
+        let nsRange = hasValue ? clamp(range, in: snapshot.value) : range
 
-        // Browser fields often have AXSelectedText and no AXValue. Do not
-        // clamp the write away against an empty value.
-        if !snapshot.selectedText.isEmpty || nsRange.length > 0 {
-            // Writing AXSelectedText against a selection the field never took
-            // *inserts* instead of replacing, leaving the original sitting next
-            // to the conversion. A web input that collapses a programmatic
-            // range — Google Forms does — turns this write into a doubling. So
-            // the range has to read back before the write is allowed to run.
-            //
-            // What happens when it will not read back is the whole-value write
-            // below, and only where that write cannot reach past the target;
-            // otherwise nothing happens here and the keystroke path takes it.
-            var selected = true
-            if canClamp, selectedRange(snapshot.element) != nsRange {
-                selected = setRange(snapshot.element, nsRange)
-                    && selectedRange(snapshot.element) == nsRange
-            }
-            if !selected {
+        if !snapshot.selectedText.isEmpty || nsRange.length > 0,
+           writeOverSelection(snapshot.element, range: nsRange, hasValue: hasValue, with: newText)
+        {
+            return .wrote
+        }
+        return writeWholeValue(snapshot, range: nsRange, hasValue: hasValue, with: newText)
+    }
+
+    /// Put the target under a selection and write through `AXSelectedText`.
+    ///
+    /// Written against a selection the field never took, it *inserts* rather
+    /// than replaces, leaving the original next to the conversion — Google
+    /// Forms collapses a programmatic range and doubles the text that way. So
+    /// the range has to read back before the write is allowed to run.
+    private static func writeOverSelection(
+        _ element: AXUIElement,
+        range: NSRange,
+        hasValue: Bool,
+        with newText: String
+    ) -> Bool {
+        if hasValue, selectedRange(element) != range {
+            guard setRange(element, range), selectedRange(element) == range else {
                 DebugLog.event("ax setRange did not take → AXValue")
-            } else if set(snapshot.element, kAXSelectedTextAttribute as CFString, newText as CFString) {
-                if canClamp {
-                    _ = setRange(snapshot.element, caret(after: nsRange, newText))
-                }
-                return .wrote
-            } else {
-                DebugLog.event("ax set AXSelectedText failed")
+                return false
             }
         }
+        guard set(element, kAXSelectedTextAttribute as CFString, newText as CFString) else {
+            DebugLog.event("ax set AXSelectedText failed")
+            return false
+        }
+        if hasValue {
+            _ = setRange(element, caret(after: range, newText))
+        }
+        return true
+    }
 
-        guard canClamp else {
+    /// Replace every character in the field, not just the target.
+    ///
+    /// Zen's multi-line AXTextArea reports offsets that run behind its own
+    /// AXValue, so the string rebuilt here is not always what the field holds
+    /// and setting it flattens the difference across the whole document, line
+    /// breaks first — a 460-character message spoiled to fix one word. Hence
+    /// the refusal to write past the target: anything wider belongs to the
+    /// keystroke path, which touches only what it selects.
+    private static func writeWholeValue(
+        _ snapshot: FieldSnapshot,
+        range: NSRange,
+        hasValue: Bool,
+        with newText: String
+    ) -> WriteAttempt {
+        guard hasValue else {
             DebugLog.event("ax replace abort: empty AXValue, AXSelectedText failed")
             return .refused
         }
-        // The write below replaces every character in the field, not just the
-        // target — including the ones this snapshot may describe wrongly. Zen's
-        // multi-line AXTextArea reports offsets that run behind its own
-        // AXValue, so the string rebuilt here is not always what the field
-        // holds, and setting it flattens the difference across the whole
-        // document: line breaks first. That is a 460-character message spoiled
-        // to fix one word.
-        //
-        // Confine it to fields where there is nothing outside the target to
-        // lose — a search box, a combo box, a text field holding one word,
-        // which is every case this path was ever wanted for. Anything wider
-        // goes to the keystroke path, which touches only what it selects.
-        guard TextRange.spansEverything(nsRange, in: snapshot.value) else {
+        let value = snapshot.value as NSString
+        guard TextRange.spansEverything(range, in: snapshot.value) else {
             DebugLog.event(
-                "ax value write declined: \(value.length - nsRange.length) chars outside " +
-                "range=\(nsRange) → retype"
+                "ax value write declined: \(value.length - range.length) chars outside " +
+                "range=\(range) → retype"
             )
             return .declined
         }
-        let updated = value.replacingCharacters(in: nsRange, with: newText)
+        let updated = value.replacingCharacters(in: range, with: newText)
         guard set(snapshot.element, kAXValueAttribute as CFString, updated as CFString) else {
             DebugLog.event("ax set AXValue failed")
             return .refused
         }
-        _ = setRange(snapshot.element, caret(after: nsRange, newText))
+        _ = setRange(snapshot.element, caret(after: range, newText))
         return .wrote
     }
 
-    /// Whether a write that *reported* success actually landed.
+    /// Whether a write that *reported* success actually landed — Monaco
+    /// answers `.success` and changes nothing.
     ///
-    /// Monaco (Cursor, VS Code) answers `AXUIElementSetAttributeValue` with
-    /// `.success` and changes nothing, so the return value cannot be trusted.
-    ///
-    /// Four-way, because "did not read back as expected" hides two opposite
-    /// situations. A field that will not read back at all is safe to assume
-    /// applied — retyping over a write that did land would double the text. A
-    /// field that reads back as neither the original nor what we wrote is the
-    /// opposite: the write went in and took something with it, and that is the
-    /// artifact this whole check exists to catch.
+    /// Four-way, because "did not read back as expected" hides two opposites:
+    /// a field that will not read back at all is safe to assume applied, while
+    /// one reading back as neither text has taken something with the write.
     enum WriteCheck {
         case applied
         case unchanged
@@ -179,14 +181,11 @@ enum FieldAccess {
         let before = snapshot.value as NSString
         let wrote = (newText as NSString).length
         if slice(value, at: range.location, length: wrote) == newText {
-            // The output is sitting where we put it — which does not prove the
-            // original left. A write that inserts instead of replacing leaves
-            // both, and the slice matches either way: that is how a field
-            // holding “Никит” *and* “Ybrbn” got logged as a confirmed replace.
-            //
-            // The field's new length is what tells them apart. Skip the check
-            // when there was no readable value to measure against, which is
-            // the browser case that the write path already special-cases.
+            // The output being there does not prove the original left: an
+            // inserting write leaves both and the slice matches either way,
+            // which is how a field holding “Никит” *and* “Ybrbn” was logged as
+            // a confirmed replace. Length is what tells them apart, so skip the
+            // check only for the browser case with no readable value.
             guard before.length > 0 else { return .applied }
             let expected = before.length - range.length + wrote
             return value.length == expected ? .applied : .mangled(value as String)
@@ -194,18 +193,14 @@ enum FieldAccess {
         if slice(value, at: range.location, length: (original as NSString).length) == original {
             return .unchanged
         }
-        // Not logged here: verify runs once per recheck, and only the verdict
-        // the confirm loop settles on is worth a line.
         return .mangled(value as String)
     }
 
     /// Put the target under an AX selection and confirm the field agrees.
     ///
     /// Apps that discard `AXSelectedText` writes often still honour a selection
-    /// change — Monaco does — which turns "retype it" into "type over the
-    /// selection": no backspace counting and no caret assumptions. Reading the
-    /// selection back is the whole point; without it we would be typing over
-    /// a range the field never actually took.
+    /// change — Monaco does. Reading the selection back is the whole point:
+    /// without it we would type over a range the field never took.
     static func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool {
         // The user's own selection is usually already exactly the target — and
         // in apps that ignore programmatic selection (Slack) it is the only
@@ -225,12 +220,9 @@ enum FieldAccess {
         return false
     }
 
-    /// Put the caret back where the snapshot found it and confirm it took.
-    ///
-    /// A refused write can still leave the range it selected behind. The
-    /// keystroke fallback deletes by count, so one backspace against a stale
-    /// selection would eat the whole run and the next N would eat what came
-    /// before it. Returns false when the caret cannot be proven collapsed.
+    /// Put the caret back where the snapshot found it, false when it cannot be
+    /// proven collapsed. A refused write can leave its selection behind, and
+    /// one backspace against that eats the whole run.
     static func restoreCaret(_ snapshot: FieldSnapshot) -> Bool {
         let caret = NSRange(location: snapshot.selectedRange.upperBound, length: 0)
         _ = setRange(snapshot.element, caret)
@@ -322,9 +314,9 @@ enum FieldAccess {
     /// The focused element is sometimes a wrapper whose text lives one or two
     /// levels down (web areas, Electron). Fall back to the longest descendant.
     private static func bestTextElement(_ root: AXUIElement) -> AXUIElement {
+        guard textContents(root).value.isEmpty else { return root }
         var best = root
-        var bestLen = textContents(root).value.utf16.count
-        guard bestLen == 0 else { return root }
+        var bestLen = 0
 
         func walk(_ element: AXUIElement, depth: Int) {
             guard depth > 0,
@@ -373,9 +365,8 @@ enum FieldAccess {
         return value as? String
     }
 
-    /// Presence of a marker-range attribute is not composition. Web and AppKit
-    /// views expose that attribute while idle; treating it as marked text made
-    /// every convert a no-op.
+    /// Web and AppKit views expose the marker attribute while idle, so its
+    /// presence is not composition — treating it as such no-op'd every convert.
     private static func hasMarkedText(_ element: AXUIElement) -> Bool {
         guard let marked = string(element, "AXMarkedText" as CFString) else { return false }
         return !marked.isEmpty
