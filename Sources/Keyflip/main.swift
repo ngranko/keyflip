@@ -5,6 +5,7 @@ import LayoutConversion
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsStore!
     private var tap: EventTap!
+    private var pair: Pair!
     private var convert: ConvertController!
     private var status: StatusItemController!
     private var retryTimer: Timer?
@@ -13,9 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings = SettingsStore()
         tap = EventTap(trigger: settings.trigger, interval: NSEvent.doubleClickInterval)
         let reader = AXFieldReader()
+        pair = Pair(settings: settings, catalog: SystemLayouts())
         convert = ConvertController(
             settings: settings,
             tap: tap,
+            pair: pair,
             reader: reader,
             rewriter: FieldRewriter(
                 settings: settings,
@@ -26,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         convert.start()
-        status = StatusItemController(settings: settings, convert: convert, tap: tap)
+        status = StatusItemController(settings: settings, pair: pair, tap: tap)
 
         guard !tap.isActive else { return }
         // The tap only fails for one reason worth handling: no Accessibility.

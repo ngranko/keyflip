@@ -4,25 +4,27 @@ import LayoutConversion
 
 @MainActor
 final class ConvertController {
-    let settings: SettingsStore
-    let tap: EventTap
-    private var maps: [String: LayoutMap] = [:]
-    private var layoutObserver: AnyObject?
+    private let settings: SettingsStore
+    private let tap: EventTap
+    private let pair: Pair
     private let rewriter: FieldRewriter
     private let reader: FieldReader
 
-    init(settings: SettingsStore, tap: EventTap, reader: FieldReader, rewriter: FieldRewriter) {
+    init(
+        settings: SettingsStore,
+        tap: EventTap,
+        pair: Pair,
+        reader: FieldReader,
+        rewriter: FieldRewriter
+    ) {
         self.settings = settings
         self.tap = tap
+        self.pair = pair
         self.reader = reader
         self.rewriter = rewriter
     }
 
     func start() {
-        reloadMaps()
-        layoutObserver = InputSources.observeEnabledChanges { [weak self] in
-            DispatchQueue.main.async { self?.reloadMaps() }
-        }
         tap.onTrigger = { [weak self] in
             Task { @MainActor in self?.handleTrigger() }
         }
@@ -30,25 +32,10 @@ final class ConvertController {
         DebugLog.event(
             "start tap=\(tap.isActive) accessibility=\(AXIsProcessTrusted()) " +
             "path=\(Permissions.bundlePath) " +
-            "pair=\(settings.slotA ?? "nil")/\(settings.slotB ?? "nil") " +
-            "trigger=\(settings.trigger.glyph) maps=\(maps.count) " +
+            "pair=\(pair.slotA ?? "nil")/\(pair.slotB ?? "nil") " +
+            "trigger=\(settings.trigger.glyph) maps=\(pair.loadedMapCount) " +
             "axRefused=\(settings.axWriteRefused.sorted().joined(separator: ",") )"
         )
-    }
-
-    func reloadMaps() {
-        let enabled = InputSources.enabledKeyboardLayouts()
-        settings.seedIfNeeded(layouts: enabled)
-        var next: [String: LayoutMap] = [:]
-        for info in enabled {
-            next[info.id] = InputSources.map(for: info)
-        }
-        // A slot can point at a source the user has since disabled. Keep it
-        // usable rather than silently dropping half the pair.
-        for id in [settings.slotA, settings.slotB].compactMap({ $0 }) where next[id] == nil {
-            next[id] = InputSources.layout(id: id).flatMap(InputSources.map(for:))
-        }
-        maps = next
     }
 
     func handleTrigger() {
@@ -56,10 +43,11 @@ final class ConvertController {
             DebugLog.event("ignored: previous rewrite still settling")
             return
         }
-        guard let pair = settings.pairIDs(), let slotA = maps[pair.0], let slotB = maps[pair.1] else {
-            DebugLog.event("abort: pair not ready (\(settings.slotA ?? "nil")/\(settings.slotB ?? "nil"))")
+        guard let maps = pair.conversionMaps else {
+            DebugLog.event("abort: pair not ready (\(pair.slotA ?? "nil")/\(pair.slotB ?? "nil"))")
             return
         }
+        let (slotA, slotB) = (maps.slotA, maps.slotB)
 
         let read = reader.read()
         Permissions.promptIfAccessibilityLapsed(available: read.accessibilityAvailable)
@@ -142,9 +130,9 @@ final class ConvertController {
     /// ADR 0004: a trigger with no target still follows — but only when the
     /// current source is in the pair. Outside the pair it is a plain no-op.
     private func togglePair() {
-        guard let pair = settings.pairIDs() else { return }
+        guard let ids = pair.ids else { return }
         let current = [InputSources.currentID(), InputSources.currentLayoutID()].compactMap { $0 }
-        guard let dest = PairFollow.chooseDestination(from: current, in: pair) else {
+        guard let dest = PairFollow.chooseDestination(from: current, in: ids) else {
             DebugLog.event("toggle skipped: \(current) outside pair")
             return
         }
