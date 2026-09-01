@@ -43,12 +43,9 @@ public enum InputSources {
     }
 
     private static func select(_ id: String, includeAllInstalled: Bool) -> Bool {
-        guard let unmanaged = TISCreateInputSourceList(
-            [kTISPropertyInputSourceID: id] as CFDictionary,
-            includeAllInstalled
-        ) else { return false }
-        let list = unmanaged.takeRetainedValue() as! [TISInputSource]
-        guard let src = list.first else { return false }
+        guard let src = sources(id: id, includeAllInstalled: includeAllInstalled).first else {
+            return false
+        }
         return TISSelectInputSource(src) == noErr
     }
 
@@ -75,12 +72,15 @@ public enum InputSources {
     }
 
     private static func lookup(id: String, includeAllInstalled: Bool) -> InputSourceInfo? {
+        sources(id: id, includeAllInstalled: includeAllInstalled).compactMap(info(from:)).first
+    }
+
+    private static func sources(id: String, includeAllInstalled: Bool) -> [TISInputSource] {
         guard let unmanaged = TISCreateInputSourceList(
             [kTISPropertyInputSourceID: id] as CFDictionary,
             includeAllInstalled
-        ) else { return nil }
-        let list = unmanaged.takeRetainedValue() as! [TISInputSource]
-        return list.compactMap(info(from:)).first
+        ) else { return [] }
+        return unmanaged.takeRetainedValue() as! [TISInputSource]
     }
 
     private static func list(includeAllInstalled: Bool) -> [InputSourceInfo] {

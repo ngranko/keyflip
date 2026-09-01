@@ -11,12 +11,9 @@ public final class TypingSession: @unchecked Sendable {
 
     public private(set) var isLive = false
 
-    /// A best-effort mirror of what the app received since the session began.
-    ///
-    /// This is what lets conversion work in fields Accessibility cannot read —
-    /// terminals and Electron editors render their own text and expose an empty
-    /// `AXValue`. Empty whenever the mirror cannot be trusted, in which case
-    /// only the Accessibility path can find a target.
+    /// A best-effort mirror of what the app received since the session began —
+    /// the only witness in fields Accessibility cannot read. Empty whenever it
+    /// cannot be trusted.
     public private(set) var typed = ""
 
     public init() {}
@@ -29,8 +26,7 @@ public final class TypingSession: @unchecked Sendable {
     /// Keep the mirror in step after synthesized keys have been sent.
     public func replaceTail(_ count: Int, with text: String) {
         // Erasing more than the mirror holds means it never described the
-        // field. Claiming it now holds exactly `text` would be a guess the
-        // blind keystroke path later deletes by; drop it instead.
+        // field, and the blind path would later delete by that guess.
         guard count <= typed.count else {
             end()
             return
@@ -51,11 +47,7 @@ public final class TypingSession: @unchecked Sendable {
     }
 
     private func handleKeyDown(_ event: TapEvent) {
-        if isShortcut(event) || isCaretMoving(event.keyCode) || isReturnOrTabOrEsc(event.keyCode) {
-            end()
-            return
-        }
-        if event.keyCode == Key.forwardDelete {
+        if isShortcut(event) || endsTheRun(event.keyCode) {
             end()
             return
         }
@@ -73,8 +65,7 @@ public final class TypingSession: @unchecked Sendable {
                 typed.removeFirst(typed.count - Self.limit)
             }
         } else {
-            // A key that produced no text we can account for. The mirror no
-            // longer matches the field, so stop offering it.
+            // No text we can account for, so the mirror no longer matches.
             typed = ""
         }
     }
@@ -94,6 +85,12 @@ public final class TypingSession: @unchecked Sendable {
         return command || control
     }
 
+    /// Keys after which the mirror would describe text the caret is no longer
+    /// in front of.
+    private func endsTheRun(_ keyCode: UInt16) -> Bool {
+        keyCode == Key.forwardDelete || isCaretMoving(keyCode) || isCommitOrCancel(keyCode)
+    }
+
     private func isCaretMoving(_ keyCode: UInt16) -> Bool {
         switch keyCode {
         case 0x7B, 0x7C, 0x7D, 0x7E, 0x73, 0x77, 0x74, 0x79:
@@ -103,7 +100,21 @@ public final class TypingSession: @unchecked Sendable {
         }
     }
 
-    private func isReturnOrTabOrEsc(_ keyCode: UInt16) -> Bool {
+    /// Return, keypad Enter, Tab, Esc.
+    private func isCommitOrCancel(_ keyCode: UInt16) -> Bool {
         keyCode == 0x24 || keyCode == 0x4C || keyCode == 0x30 || keyCode == 0x35
+    }
+}
+
+extension TypingSession {
+    /// The same "last run of non-whitespace, trailing space skipped" rule the
+    /// field path uses, read from the mirror. Nil while the mirror has nothing
+    /// a rewrite could be counted against.
+    public var lastRun: (text: String, trailing: String)? {
+        guard isLive,
+              let word = LastWord.range(in: typed, caretUTF16: (typed as NSString).length)
+        else { return nil }
+        let ns = typed as NSString
+        return (ns.substring(with: word.nsRange), ns.substring(from: word.nsRange.upperBound))
     }
 }

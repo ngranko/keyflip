@@ -12,19 +12,13 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var pillsView: PillsView?
     private var menuIsOpen = false
 
-    /// The item's identity in the menu bar, and the one thing about it that
-    /// has to stay the same forever.
+    /// The item's menu bar identity, which has to stay the same forever.
     ///
-    /// Without an `autosaveName` AppKit invents one — `Item-0`, by creation
-    /// order — and that is not an identity at all: every status item whose app
-    /// never set one is also `Item-0`, ControlCenter's included, as
-    /// `defaults read com.apple.controlcenter` will show. macOS files the
-    /// item's menu bar position under that name, and so does every menu bar
-    /// manager that tracks items across launches. Ice caches a window ID per
-    /// item and asks the window server for its bounds when dragging one
-    /// between sections; against an identity that is shared, reused, and
-    /// re-created under it, the cached ID goes stale and the lookup comes back
-    /// empty — "Missing bounds rectangle for Keyflip".
+    /// Without this AppKit invents `Item-0` by creation order — as does every
+    /// other app that never set one, ControlCenter included. macOS files the
+    /// item's position under that name and so do menu bar managers, so a
+    /// shared, reused identity leaves Ice's cached window ID stale:
+    /// "Missing bounds rectangle for Keyflip".
     private static let autosaveName = "Keyflip"
 
     init(settings: SettingsStore, convert: ConvertController, tap: EventTap) {
@@ -41,14 +35,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         statusItem.menu = menu
     }
 
-    /// Carry the position AppKit filed under the invented name over to the
-    /// real one, once.
-    ///
     /// Naming the item changes the key its position lives under, so without
-    /// this the icon jumps to the end of the menu bar on the first launch
-    /// after the fix — the icon moving on its own being the exact complaint
-    /// this is meant to end. Runs before the item is created, because that is
-    /// when AppKit reads the position back.
+    /// this the icon jumps to the end of the menu bar once, on the first launch
+    /// after the fix. Must run before the item is created, which is when AppKit
+    /// reads the position back.
     private static func adoptLegacyPosition() {
         let defaults = UserDefaults.standard
         let legacy = "NSStatusItem Preferred Position Item-0"
@@ -88,31 +78,34 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private func rebuild(_ menu: NSMenu) {
         menu.removeAllItems()
         menu.autoenablesItems = false
+        addAccessibilityGrant(to: menu)
+        addPair(to: menu)
+        menu.addItem(.separator())
+        addPills(to: menu)
+        menu.addItem(.separator())
+        addFooter(to: menu)
+    }
 
-        if !Permissions.accessibilityTrusted {
-            let grant = NSMenuItem(
-                title: "Enable Accessibility…",
-                action: #selector(requestAccessibility),
-                keyEquivalent: ""
-            )
-            grant.target = self
-            grant.isEnabled = true
-            grant.toolTip = Permissions.bundlePath
-            menu.addItem(grant)
-            menu.addItem(.separator())
-        }
+    /// Only while the grant is missing: the menu is settings, not a status
+    /// board (ADR 0003).
+    private func addAccessibilityGrant(to menu: NSMenu) {
+        guard !Permissions.accessibilityTrusted else { return }
+        let grant = NSMenuItem(
+            title: "Enable Accessibility…",
+            action: #selector(requestAccessibility),
+            keyEquivalent: ""
+        )
+        grant.target = self
+        grant.isEnabled = true
+        grant.toolTip = Permissions.bundlePath
+        menu.addItem(grant)
+        menu.addItem(.separator())
+    }
 
-        if #available(macOS 14.0, *) {
-            menu.addItem(.sectionHeader(title: "Pair"))
-        } else {
-            let header = NSMenuItem(title: "Pair", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-        }
-
-        let layouts = InputSources.enabledKeyboardLayouts()
+    private func addPair(to menu: NSMenu) {
+        menu.addItem(Self.header("Pair"))
         let pairView = PairColumnsView(
-            layouts: layouts,
+            layouts: InputSources.enabledKeyboardLayouts(),
             slotA: settings.slotA,
             slotB: settings.slotB,
             onPickA: { [weak self] id in
@@ -127,13 +120,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             }
         )
         self.pairView = pairView
-        let pairItem = NSMenuItem()
-        pairItem.isEnabled = false
-        pairItem.view = pairView
-        menu.addItem(pairItem)
+        menu.addItem(Self.item(hosting: pairView))
+    }
 
-        menu.addItem(.separator())
-
+    private func addPills(to menu: NSMenu) {
         let pills = PillsView(
             triggerGlyph: settings.trigger.glyph,
             launchOn: LaunchAtLogin.isEnabled,
@@ -149,13 +139,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             }
         )
         self.pillsView = pills
-        let pillsItem = NSMenuItem()
-        pillsItem.isEnabled = false
-        pillsItem.view = pills
-        menu.addItem(pillsItem)
+        menu.addItem(Self.item(hosting: pills))
+    }
 
-        menu.addItem(.separator())
-
+    private func addFooter(to menu: NSMenu) {
         let log = NSMenuItem(
             title: "Show debug log…",
             action: #selector(showDebugLog),
@@ -172,6 +159,23 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         )
         quit.target = NSApp
         menu.addItem(quit)
+    }
+
+    /// A frame for a view: it must not highlight or answer a click of its own.
+    private static func item(hosting view: NSView) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.isEnabled = false
+        item.view = view
+        return item
+    }
+
+    private static func header(_ title: String) -> NSMenuItem {
+        if #available(macOS 14.0, *) {
+            return .sectionHeader(title: title)
+        }
+        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        return header
     }
 
     @objc private func requestAccessibility() {
@@ -218,463 +222,18 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     private func showRecordPanel() {
-        let panel = RecordPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 240, height: 88),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Set trigger"
-        panel.level = .floating
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
+        let panel = RecordPanel.make(anchoredTo: statusItem.button)
         panel.delegate = self
         panel.onCancel = { [weak self] in
             self?.cancelRecording()
         }
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let line = NSTextField(labelWithString: "Press the new trigger.")
-        line.font = .systemFont(ofSize: 13, weight: .medium)
-        let hint = NSTextField(labelWithString: "Esc cancels.")
-        hint.font = .systemFont(ofSize: 12)
-        hint.textColor = .secondaryLabelColor
-        stack.addArrangedSubview(line)
-        stack.addArrangedSubview(hint)
-
-        panel.contentView?.addSubview(stack)
-        if let content = panel.contentView {
-            NSLayoutConstraint.activate([
-                stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-                stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            ])
-        }
-
-        panel.setFrameOrigin(recorderOrigin(sized: panel.frame.size))
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         recordPanel = panel
     }
 
-    /// Where to put the recorder, given a menu bar item that may not be
-    /// anywhere the user can look.
-    ///
-    /// Ice and Bartender hide an item by parking its window off the left edge
-    /// — x ≈ -4000 in the window server's own list, which is where Keyflip's
-    /// sits while it is in a hidden section. That is a perfectly real
-    /// rectangle, so the old check for one passed and put the panel out there
-    /// with it: a window asking for a keystroke, off screen, with the trigger
-    /// tap already listening. Anchor to the button only while it is on a
-    /// screen, and land in the middle of the display when it is not.
-    private func recorderOrigin(sized size: NSSize) -> NSPoint {
-        if let button = statusItem.button, let window = button.window {
-            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
-            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(rect) }) {
-                return NSPoint(x: rect.midX - size.width / 2, y: rect.minY - size.height - 12)
-            }
-        }
-        let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        return NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2)
-    }
-
     func windowWillClose(_ notification: Notification) {
         guard notification.object as AnyObject? === recordPanel else { return }
         cancelRecording()
-    }
-}
-
-final class RecordPanel: NSPanel {
-    var onCancel: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onCancel?()
-    }
-}
-
-final class PairColumnsView: NSView {
-    private var rowsA: [String: LayoutRow] = [:]
-    private var rowsB: [String: LayoutRow] = [:]
-
-    init(
-        layouts: [InputSourceInfo],
-        slotA: String?,
-        slotB: String?,
-        onPickA: @escaping (String) -> Void,
-        onPickB: @escaping (String) -> Void
-    ) {
-        let rowHeight: CGFloat = 22
-        let width: CGFloat = 300
-        let pad: CGFloat = 8
-        let height = CGFloat(max(layouts.count, 1)) * rowHeight + pad * 2
-        super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        autoresizingMask = [.width]
-
-        let cols = NSStackView()
-        cols.orientation = .horizontal
-        cols.distribution = .fillEqually
-        cols.spacing = 6
-        cols.translatesAutoresizingMaskIntoConstraints = false
-
-        let builtA = Self.column(layouts: layouts, selected: slotA, blocked: slotB, pick: onPickA)
-        let builtB = Self.column(layouts: layouts, selected: slotB, blocked: slotA, pick: onPickB)
-        rowsA = builtA.rows
-        rowsB = builtB.rows
-        cols.addArrangedSubview(builtA.view)
-        cols.addArrangedSubview(builtB.view)
-
-        addSubview(cols)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: height),
-            cols.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
-            cols.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
-            cols.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            cols.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -pad),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    func apply(slotA: String?, slotB: String?) {
-        for (id, row) in rowsA {
-            row.set(on: id == slotA, disabled: id == slotB)
-        }
-        for (id, row) in rowsB {
-            row.set(on: id == slotB, disabled: id == slotA)
-        }
-    }
-
-    private static func column(
-        layouts: [InputSourceInfo],
-        selected: String?,
-        blocked: String?,
-        pick: @escaping (String) -> Void
-    ) -> (view: NSView, rows: [String: LayoutRow]) {
-        let box = ColumnBox()
-        box.translatesAutoresizingMaskIntoConstraints = false
-        box.layer?.cornerRadius = 8
-        box.refreshLayerColors()
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.spacing = 0
-        stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        var rows: [String: LayoutRow] = [:]
-        for layout in layouts {
-            let disabled = layout.id == blocked
-            let on = layout.id == selected
-            let row = LayoutRow(
-                title: layout.name,
-                on: on,
-                disabled: disabled,
-                action: { pick(layout.id) }
-            )
-            rows[layout.id] = row
-            stack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        if layouts.isEmpty {
-            let empty = NSTextField(labelWithString: "No layouts")
-            empty.textColor = .secondaryLabelColor
-            empty.font = .menuFont(ofSize: 13)
-            empty.alignment = .left
-            stack.addArrangedSubview(empty)
-            empty.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        box.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -4),
-            stack.topAnchor.constraint(equalTo: box.topAnchor, constant: 4),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -4),
-        ])
-        return (box, rows)
-    }
-}
-
-/// A view whose layer colours survive a light/dark switch.
-///
-/// `NSColor.cgColor` resolves a dynamic system colour *once*, against whatever
-/// `NSAppearance.current` happens to be, and the CGColor it returns never
-/// changes again. Two things go wrong with that. During menu construction
-/// `NSAppearance.current` is left over from the last drawing pass rather than
-/// the appearance this view will render in, so the colour can be wrong the
-/// moment it is set; and a later theme switch cannot reach it at all. Text
-/// keeps its `NSColor` and re-resolves itself, which is how a switch to light
-/// mode left black pills sitting behind black labels.
-///
-/// So layer colours are set in one place, resolved against the view's own
-/// appearance, and re-applied whenever that appearance changes.
-class ThemedView: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    /// Set every layer colour here and nowhere else. Runs again on each
-    /// appearance change, with that appearance current.
-    func applyLayerColors() {}
-
-    final func refreshLayerColors() {
-        effectiveAppearance.performAsCurrentDrawingAppearance { [self] in
-            applyLayerColors()
-        }
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        refreshLayerColors()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        // The menu's appearance only reaches the view once it has a window,
-        // and that is often the first moment it is knowable.
-        refreshLayerColors()
-    }
-}
-
-extension NSColor {
-    /// The tint the menu's grouped surfaces share, so the columns and the
-    /// pills read as one panel instead of as content dropped onto it.
-    ///
-    /// `controlBackgroundColor` is the wrong tool here: it is meant for
-    /// content behind a window, and in light mode it is pure white, which
-    /// against the menu's translucent grey looked like a cut-out.
-    ///
-    /// Must be read with the target appearance current — `withAlphaComponent`
-    /// resolves the dynamic colour at the point it is called.
-    static var menuSurface: NSColor { NSColor.labelColor.withAlphaComponent(0.05) }
-}
-
-/// The rounded backing behind one column of layouts.
-final class ColumnBox: ThemedView {
-    override func applyLayerColors() {
-        layer?.backgroundColor = NSColor.menuSurface.cgColor
-    }
-}
-
-final class LayoutRow: ThemedView {
-    private let action: () -> Void
-    private var disabled: Bool
-    private let tick: NSTextField
-    private var tracking: NSTrackingArea?
-    private var hovering = false
-
-    init(title: String, on: Bool, disabled: Bool, action: @escaping () -> Void) {
-        self.action = action
-        self.disabled = disabled
-        let tick = NSTextField(labelWithString: on ? "✓" : " ")
-        tick.font = .menuFont(ofSize: 11)
-        tick.alignment = .center
-        tick.translatesAutoresizingMaskIntoConstraints = false
-        self.tick = tick
-        super.init(frame: NSRect(x: 0, y: 0, width: 140, height: 22))
-        translatesAutoresizingMaskIntoConstraints = false
-        layer?.cornerRadius = 4
-        alphaValue = disabled ? 0.4 : 1
-        refreshLayerColors()
-
-        let label = NSTextField(labelWithString: title)
-        label.font = .menuFont(ofSize: 13)
-        label.alignment = .left
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(tick)
-        addSubview(label)
-        setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 22),
-            tick.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            tick.widthAnchor.constraint(equalToConstant: 14),
-            tick.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: tick.trailingAnchor, constant: 4),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func applyLayerColors() {
-        // Accent colour is dynamic too — this follows a change of accent in
-        // System Settings as well as a change of theme.
-        layer?.backgroundColor = hovering && !disabled
-            ? NSColor.controlAccentColor.cgColor
-            : nil
-    }
-
-    func set(on: Bool, disabled: Bool) {
-        self.disabled = disabled
-        tick.stringValue = on ? "✓" : " "
-        alphaValue = disabled ? 0.4 : 1
-        if disabled { hovering = false }
-        refreshLayerColors()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard !disabled else { return }
-        hovering = true
-        refreshLayerColors()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hovering = false
-        refreshLayerColors()
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard !disabled else { return }
-        action()
-    }
-}
-
-final class PillsView: NSView {
-    private let login: PillButton
-    private let trigger: PillButton
-
-    init(
-        triggerGlyph: String,
-        launchOn: Bool,
-        onSetTrigger: @escaping () -> Void,
-        onToggleLogin: @escaping () -> Void
-    ) {
-        login = PillButton(
-            title: launchOn ? "On" : "Off",
-            subtitle: "Launch at login",
-            action: onToggleLogin
-        )
-        trigger = PillButton(
-            title: triggerGlyph,
-            subtitle: "Set trigger…",
-            action: onSetTrigger
-        )
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 48))
-        autoresizingMask = [.width]
-        let row = NSStackView(views: [trigger, login])
-        row.orientation = .horizontal
-        row.distribution = .fillEqually
-        row.spacing = 8
-        row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 48),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    func setLaunchOn(_ on: Bool) {
-        login.setTitle(on ? "On" : "Off")
-    }
-
-    func setTriggerGlyph(_ glyph: String) {
-        trigger.setTitle(glyph)
-    }
-}
-
-final class PillButton: ThemedView {
-    private let action: () -> Void
-    private let titleField: NSTextField
-    private var tracking: NSTrackingArea?
-    private var hovering = false
-
-    init(title: String, subtitle: String, action: @escaping () -> Void) {
-        self.action = action
-        let titleField = NSTextField(labelWithString: title)
-        titleField.font = .systemFont(ofSize: 12, weight: .semibold)
-        titleField.translatesAutoresizingMaskIntoConstraints = false
-        self.titleField = titleField
-        super.init(frame: NSRect(x: 0, y: 0, width: 140, height: 40))
-        translatesAutoresizingMaskIntoConstraints = false
-        layer?.cornerRadius = 7
-        layer?.borderWidth = 1
-        refreshLayerColors()
-        let sub = NSTextField(labelWithString: subtitle)
-        sub.font = .systemFont(ofSize: 11)
-        sub.textColor = .secondaryLabelColor
-        sub.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(titleField)
-        addSubview(sub)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 40),
-            titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            titleField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            titleField.topAnchor.constraint(equalTo: topAnchor, constant: 7),
-            sub.leadingAnchor.constraint(equalTo: titleField.leadingAnchor),
-            sub.trailingAnchor.constraint(equalTo: titleField.trailingAnchor),
-            sub.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 1),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func applyLayerColors() {
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = hovering
-            ? NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
-            : NSColor.menuSurface.cgColor
-    }
-
-    func setTitle(_ title: String) {
-        titleField.stringValue = title
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        hovering = true
-        refreshLayerColors()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hovering = false
-        refreshLayerColors()
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        action()
     }
 }

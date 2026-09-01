@@ -91,7 +91,21 @@ private func typing(_ characters: String, keyCode: UInt16 = 0x00) -> TapEvent {
         session.handle(typing(String(ch), keyCode: ch == " " ? 0x31 : 0x00))
     }
     #expect(session.typed == "ghbdtn ")
-    #expect(LastWord.substring(in: session.typed, caretUTF16: session.typed.utf16.count) == "ghbdtn")
+    // The trailing space is what the blind rewrite has to erase along with
+    // the word, so the mirror reports both halves apart.
+    let run = session.lastRun
+    #expect(run?.text == "ghbdtn")
+    #expect(run?.trailing == " ")
+}
+
+@Test func aMirrorWithNothingToSayOffersNoRun() {
+    let session = TypingSession()
+    #expect(session.lastRun == nil)
+
+    // Backspace alone never starts a session, so there is still nothing to
+    // count a rewrite against.
+    session.handle(typing("", keyCode: 0x33))
+    #expect(session.lastRun == nil)
 }
 
 @Test func replaceTailSwapsTheConvertedWordBackIn() {

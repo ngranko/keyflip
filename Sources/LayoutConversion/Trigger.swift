@@ -55,17 +55,24 @@ public enum Trigger: Equatable, Codable, Sendable {
         }
     }
 
-    /// Shift, Control, Option, Command — the bits a trigger may name.
+    /// Shift has no `ModifierKey` case — a trigger cannot be a double-tap of
+    /// it, because Shift alone is how the next character is capitalised — but
+    /// a chord may still name it.
+    private static let shiftFlag: UInt64 = 1 << 17
+
+    /// Every bit a trigger may name, in the order macOS writes them.
+    private static let namedModifiers: [(bit: UInt64, glyph: String)] = [
+        (ModifierKey.control.flagBit, ModifierKey.control.glyph),
+        (ModifierKey.option.flagBit, ModifierKey.option.glyph),
+        (shiftFlag, "⇧"),
+        (ModifierKey.command.flagBit, ModifierKey.command.glyph),
+    ]
+
     /// Caps Lock, Fn, and the numeric-pad bit must not reject a match.
-    public static let relevantModifiers: UInt64 = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)
+    public static let relevantModifiers: UInt64 = namedModifiers.reduce(0) { $0 | $1.bit }
 
     public static func modifierGlyphs(_ flags: UInt64) -> String {
-        var s = ""
-        if flags & (1 << 18) != 0 { s += "⌃" }
-        if flags & (1 << 19) != 0 { s += "⌥" }
-        if flags & (1 << 17) != 0 { s += "⇧" }
-        if flags & (1 << 20) != 0 { s += "⌘" }
-        return s
+        namedModifiers.filter { flags & $0.bit != 0 }.map(\.glyph).joined()
     }
 
     public static func keyLabel(_ keyCode: UInt16) -> String {

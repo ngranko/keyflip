@@ -20,13 +20,12 @@ public enum ConversionDecision: Equatable, Sendable {
 public enum PairConversion {
     /// Typographic punctuation folded back to the keys that produced it.
     ///
-    /// macOS substitutes smart quotes as you type, so what reaches the field
-    /// is not what the key gave: an apostrophe typed on the `'`/`э` key
-    /// arrives as U+2019, which sits on no layout at all. The unmapped rule
-    /// (ADR 0001) then left it alone, and `этот` came back as `’тот`.
+    /// macOS substitutes smart quotes as you type, so an apostrophe from the
+    /// `'`/`э` key arrives as U+2019, which sits on no layout at all: the
+    /// unmapped rule (ADR 0001) left it alone and `этот` came back as `’тот`.
     ///
-    /// Quotes only. An em dash would fold onto the hyphen key and quietly
-    /// turn punctuation the user chose into punctuation they did not.
+    /// Quotes only — an em dash would fold onto the hyphen key and change
+    /// punctuation the user chose.
     private static let typographic: [String: String] = [
         "\u{2018}": "'",
         "\u{2019}": "'",
