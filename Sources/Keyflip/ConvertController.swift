@@ -1,4 +1,5 @@
 import ApplicationServices
+import CoreGraphics
 import Foundation
 import LayoutConversion
 
@@ -28,9 +29,9 @@ final class ConvertController {
         tap.onTrigger = { [weak self] in
             Task { @MainActor in self?.handleTrigger() }
         }
-        tap.start()
         DebugLog.event(
-            "start tap=\(tap.isActive) accessibility=\(AXIsProcessTrusted()) " +
+            "start tap=\(tap.modeDescription) accessibility=\(AXIsProcessTrusted()) " +
+            "listenEvent=\(CGPreflightListenEventAccess()) " +
             "path=\(Permissions.bundlePath) " +
             "pair=\(pair.slotA ?? "nil")/\(pair.slotB ?? "nil") " +
             "trigger=\(settings.trigger.glyph) maps=\(pair.loadedMapCount) " +

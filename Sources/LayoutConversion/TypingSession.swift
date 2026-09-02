@@ -1,5 +1,8 @@
 import Foundation
 
+/// The mirror is written from the event tap's own thread and read from the
+/// main one, so every entry point takes the lock. Nothing inside it does more
+/// than touch a string: a keystroke can wait on that, and never longer.
 public final class TypingSession: @unchecked Sendable {
     private enum Key {
         static let backspace: UInt16 = 0x33
@@ -9,64 +12,83 @@ public final class TypingSession: @unchecked Sendable {
     /// Far more than a word, still bounded.
     private static let limit = 256
 
-    public private(set) var isLive = false
+    private let lock = NSLock()
+    private var live = false
+    private var mirror = ""
+
+    public var isLive: Bool { locked { live } }
 
     /// A best-effort mirror of what the app received since the session began —
     /// the only witness in fields Accessibility cannot read. Empty whenever it
     /// cannot be trusted.
-    public private(set) var typed = ""
+    public var typed: String { locked { mirror } }
 
     public init() {}
 
     public func end() {
-        isLive = false
-        typed = ""
+        locked { reset() }
     }
 
     /// Keep the mirror in step after synthesized keys have been sent.
     public func replaceTail(_ count: Int, with text: String) {
-        // Erasing more than the mirror holds means it never described the
-        // field, and the blind path would later delete by that guess.
-        guard count <= typed.count else {
-            end()
-            return
+        locked {
+            // Erasing more than the mirror holds means it never described the
+            // field, and the blind path would later delete by that guess.
+            guard count <= mirror.count else {
+                reset()
+                return
+            }
+            mirror.removeLast(count)
+            mirror += text
         }
-        typed.removeLast(count)
-        typed += text
     }
 
     public func handle(_ event: TapEvent) {
-        switch event.kind {
-        case .mouseDown:
-            end()
-        case .flagsChanged:
-            break
-        case .keyDown:
-            handleKeyDown(event)
+        locked {
+            switch event.kind {
+            case .mouseDown:
+                reset()
+            case .flagsChanged:
+                break
+            case .keyDown:
+                handleKeyDown(event)
+            }
         }
     }
 
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    private func reset() {
+        live = false
+        mirror = ""
+    }
+
+    /// Callers hold the lock.
     private func handleKeyDown(_ event: TapEvent) {
         if isShortcut(event) || endsTheRun(event.keyCode) {
-            end()
+            reset()
             return
         }
         if event.keyCode == Key.backspace {
             // Backspace never starts a session, but it does shorten one.
-            if isLive, !typed.isEmpty {
-                typed.removeLast()
+            if live, !mirror.isEmpty {
+                mirror.removeLast()
             }
             return
         }
-        isLive = true
+        live = true
         if Self.isTypable(event.characters) {
-            typed += event.characters
-            if typed.count > Self.limit {
-                typed.removeFirst(typed.count - Self.limit)
+            mirror += event.characters
+            if mirror.count > Self.limit {
+                mirror.removeFirst(mirror.count - Self.limit)
             }
         } else {
             // No text we can account for, so the mirror no longer matches.
-            typed = ""
+            mirror = ""
         }
     }
 
@@ -111,10 +133,11 @@ extension TypingSession {
     /// field path uses, read from the mirror. Nil while the mirror has nothing
     /// a rewrite could be counted against.
     public var lastRun: (text: String, trailing: String)? {
-        guard isLive,
-              let word = LastWord.range(in: typed, caretUTF16: (typed as NSString).length)
+        let (live, mirror) = locked { (self.live, self.mirror) }
+        guard live,
+              let word = LastWord.range(in: mirror, caretUTF16: (mirror as NSString).length)
         else { return nil }
-        let ns = typed as NSString
+        let ns = mirror as NSString
         return (ns.substring(with: word), ns.substring(from: word.upperBound))
     }
 }
