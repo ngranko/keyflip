@@ -209,6 +209,9 @@ final class EventTap: @unchecked Sendable {
         guard let recorder, now < recordingExpiry else {
             DebugLog.event("recording outlived its panel → keys pass through")
             endRecording(reporting: .cancel)
+            // Off this thread and out from under the lock: rebuilding the tap
+            // from inside its own callback would stop the run loop serving it.
+            DispatchQueue.main.async { [weak self] in self?.matchModeToWork() }
             return passthrough
         }
         let result = recorder.handle(tapEvent, at: now)

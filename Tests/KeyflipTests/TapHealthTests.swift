@@ -23,6 +23,12 @@ struct TapHealthTests {
         #expect(survivals == [true, true])
     }
 
+    @Test func aTimeoutAMinuteOnIsPastTheWindow() {
+        var health = TapHealth()
+        let survivals = [100.0, 160].map { health.survivesTimeout(at: $0) }
+        #expect(survivals == [true, true])
+    }
+
     @Test func aTapArmedAfreshStartsWithACleanRecord() {
         var health = TapHealth()
         _ = health.survivesTimeout(at: 100)

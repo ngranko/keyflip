@@ -16,7 +16,7 @@ struct TapHealth {
 
     mutating func survivesTimeout(at now: TimeInterval) -> Bool {
         timeouts.append(now)
-        timeouts.removeAll { now - $0 > Self.window }
+        timeouts.removeAll { now - $0 >= Self.window }
         return timeouts.count <= Self.budget
     }
 
