@@ -7,6 +7,16 @@ private let app = "Cursor"
 private let target = Target(text: "сщьз", range: NSRange(location: 0, length: 4))
 private let output = "comp"
 
+private func field(showing value: String) -> FieldReading {
+    FieldReading(
+        app: app,
+        role: "AXTextArea",
+        value: value,
+        selectedRange: NSRange(location: 0, length: 0),
+        selectedText: ""
+    )
+}
+
 private func field(selecting selectedText: String = "") -> FieldReading {
     FieldReading(
         app: app,
@@ -38,7 +48,8 @@ private struct Ladder {
         writer: ScriptedWriter,
         selecting selectedText: String = "",
         mirror: String = "",
-        alreadyRefused: Set<String> = []
+        alreadyRefused: Set<String> = [],
+        readsBack: FieldReading? = nil
     ) {
         let defaults = UserDefaults(suiteName: "KeyflipRungTests")!
         defaults.removePersistentDomain(forName: "KeyflipRungTests")
@@ -50,7 +61,7 @@ private struct Ladder {
         self.rewriter = FieldRewriter(
             settings: settings,
             session: liveSession(typing: mirror),
-            reader: ScriptedField(always: reading),
+            reader: readsBack.map { ScriptedField(showing: [$0]) } ?? ScriptedField(always: reading),
             writer: writer,
             wait: ImmediateWait()
         )
@@ -194,4 +205,38 @@ private struct Ladder {
     writer.selectAnswers = [false]
     let ladder = Ladder(writer: writer, mirror: "something else", alreadyRefused: [app])
     #expect(!ladder.run())
+}
+
+/// The Slack failure this was written for: the backspaces landed, the text
+/// meant to replace them never arrived, and the field settled empty. An empty
+/// field is the one readback where typing the words again cannot double them.
+@MainActor
+@Test func textTheFieldLostIsTypedAgain() {
+    let writer = ScriptedWriter()
+    writer.selectAnswers = [false]
+    let ladder = Ladder(
+        writer: writer,
+        mirror: target.text,
+        alreadyRefused: [app],
+        readsBack: field(showing: "")
+    )
+    #expect(ladder.run())
+    #expect(writer.calls.contains(.typeKeys(deleting: 4, with: output)))
+    #expect(writer.calls.filter { $0 == .typeKeys(deleting: 0, with: output) }.count == 1)
+}
+
+/// A field that came back holding something else is a diagnosis, not a loss:
+/// typing over text we cannot account for is how the words get doubled.
+@MainActor
+@Test func textTheFieldReplacedWithSomethingElseIsLeftAlone() {
+    let writer = ScriptedWriter()
+    writer.selectAnswers = [false]
+    let ladder = Ladder(
+        writer: writer,
+        mirror: target.text,
+        alreadyRefused: [app],
+        readsBack: field(showing: "что-то ещё")
+    )
+    #expect(ladder.run())
+    #expect(!writer.calls.contains(.typeKeys(deleting: 0, with: output)))
 }
