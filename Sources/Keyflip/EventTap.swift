@@ -3,6 +3,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 import LayoutConversion
+import os
 
 /// One filtering CGEvent tap drives the recognizer, the typing session, and
 /// the Set-trigger recorder.
@@ -10,18 +11,43 @@ import LayoutConversion
 /// Not an NSEvent monitor: those hand back a non-nil token even when the
 /// process is untrusted and will never deliver a keystroke, so `isActive`
 /// could not mean anything.
+///
+/// Everything here runs on the tap's own thread and must stay short. The one
+/// rule that outranks every feature: an event this app cannot deal with right
+/// now goes through untouched (ADR 0009).
 final class EventTap: @unchecked Sendable {
     var onTrigger: (() -> Void)?
 
     let session = TypingSession()
     let recognizer: TriggerRecognizer
 
-    private var port: CFMachPort?
-    private var recorder: Recorder?
-    private var onRecorded: ((Recorder.Result) -> Void)?
-    private var loggedFailure = false
+    /// A panel left open — or an app that stalled with one open — must not go
+    /// on swallowing the keyboard.
+    private static let recordingLimit: TimeInterval = 60
 
-    var isActive: Bool { port != nil }
+    private var port: TapPort!
+    private let lock = NSLock()
+    /// Stamped before anything that could fail or wait, so it witnesses the
+    /// keystroke even when the rest of the callback declines to touch it.
+    private let lastKeyDown = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+    private var recorder: Recorder?
+    private var recordingExpiry: TimeInterval = 0
+    private var onRecorded: ((Recorder.Result) -> Void)?
+
+    var isActive: Bool { port.isActive }
+
+    /// Given up on for this launch, rather than refused by the system.
+    var isRetired: Bool { port.isRetired }
+
+    /// What the live tap may do to an event, in the words the log uses. The
+    /// first question to ask of any report of stuck input.
+    var modeDescription: String {
+        switch port.mode {
+        case .listenOnly: return "listen only"
+        case .defaultTap: return "may delete"
+        default: return "none"
+        }
+    }
 
     private static let mask: CGEventMask =
         (1 << CGEventType.keyDown.rawValue)
@@ -32,79 +58,112 @@ final class EventTap: @unchecked Sendable {
 
     init(trigger: Trigger, interval: TimeInterval) {
         recognizer = TriggerRecognizer(trigger: trigger, interval: interval)
-    }
-
-    /// Idempotent, so the launch retry loop can keep calling it until the
-    /// Accessibility grant lands.
-    @discardableResult
-    func start() -> Bool {
-        if isActive { return true }
-        guard let port = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: Self.mask,
-            callback: { _, type, event, info in
-                guard let info else { return Unmanaged.passUnretained(event) }
-                return Unmanaged<EventTap>.fromOpaque(info)
-                    .takeUnretainedValue()
-                    .handle(type: type, event: event)
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            // The retry loop calls this every couple of seconds; say it once.
-            if !loggedFailure {
-                loggedFailure = true
-                DebugLog.event("tap create failed (accessibility=\(AXIsProcessTrusted())) — retrying")
-            }
-            return false
+        port = TapPort(mask: Self.mask) { [weak self] type, event in
+            guard let self else { return Unmanaged.passUnretained(event) }
+            return self.handle(type: type, event: event)
         }
-        loggedFailure = false
-
-        self.port = port
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: port, enable: true)
-
-        // The tap lives as long as the process; nothing ever unregisters this.
-        _ = NSWorkspace.shared.notificationCenter.addObserver(
+        NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.session.end()
         }
-
-        DebugLog.event("tap active")
-        return true
     }
 
+    @discardableResult
+    func start() -> Bool {
+        witnessKeyDown()
+        return port.start(neededMode())
+    }
+
+    /// Hands the tap over on evidence it is holding input; see `TapPort`.
+    func giveUp(_ reason: String) { port.giveUp(reason) }
+
+    /// How long since a keystroke reached this tap.
+    var secondsSinceKeyDown: TimeInterval {
+        ProcessInfo.processInfo.systemUptime - lastKeyDown.withLock { $0 }
+    }
+
+    /// Leaves the process with no way to touch anyone's input.
+    func stop() {
+        port.stop()
+        session.end()
+        stopRecording()
+        recognizer.reset()
+    }
+
+    func rearm() { port.rearm() }
+
     func setTrigger(_ trigger: Trigger) {
+        lock.lock()
         recognizer.trigger = trigger
         recognizer.reset()
+        lock.unlock()
+        matchModeToWork()
+    }
+
+    /// What this app needs the tap to be allowed to do.
+    ///
+    /// A tap that may only listen cannot hold anyone's keyboard, whatever goes
+    /// wrong in this process (ADR 0009), so it is preferred wherever it will
+    /// do. Creating one raises the Input Monitoring dialog, but the access
+    /// itself rides on the Accessibility grant this app must have anyway to
+    /// read a field: with `ListenEvent` reset to undecided, this still
+    /// preflights true, and a process without Accessibility preflights false.
+    /// So the check is what decides, never the dialog — declining it costs
+    /// nothing today, and the day a macOS separates the two, this degrades to
+    /// an active tap by itself rather than losing the tap.
+    private func neededMode() -> CGEventTapOptions {
+        guard !mustDeleteEvents(), CGPreflightListenEventAccess() else { return .defaultTap }
+        return .listenOnly
+    }
+
+    /// A chord trigger's key must fire without also typing its character, and
+    /// the Set-trigger panel swallows keys so binding ⌘Q does not quit the app
+    /// underneath it. A double-tap — the default — deletes nothing, ever.
+    private func mustDeleteEvents() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if recorder != nil { return true }
+        if case .chord = recognizer.trigger { return true }
+        return false
+    }
+
+    /// A tap cannot be given new powers, only replaced by one that has them.
+    private func matchModeToWork() {
+        let wanted = neededMode()
+        guard let mode = port.mode, mode != wanted else { return }
+        DebugLog.event("tap mode → \(wanted == .listenOnly ? "listen only" : "may delete")")
+        port.stop()
+        port.start(wanted)
     }
 
     /// While recording, keystrokes go to the recorder and are swallowed, so
     /// binding ⌘Q does not quit the app underneath the panel.
     func startRecording(interval: TimeInterval, onResult: @escaping (Recorder.Result) -> Void) {
+        lock.lock()
         onRecorded = onResult
         recorder = Recorder(interval: interval)
+        recordingExpiry = ProcessInfo.processInfo.systemUptime + Self.recordingLimit
+        lock.unlock()
+        matchModeToWork()
     }
 
     func stopRecording() {
-        recorder = nil
-        onRecorded = nil
-        recognizer.reset()
+        lock.lock()
+        endRecording()
+        lock.unlock()
+        matchModeToWork()
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let passthrough = Unmanaged.passUnretained(event)
+        if type == .keyDown { witnessKeyDown() }
 
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            DebugLog.event("tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
-            if let port {
-                CGEvent.tapEnable(tap: port, enable: true)
-            }
+            DebugLog.event("tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
+            port.recoverFromDisable(type)
             return passthrough
         }
 
@@ -115,16 +174,22 @@ final class EventTap: @unchecked Sendable {
         }
 
         guard let tapEvent = TapEvent(type: type, event: event) else { return passthrough }
+
+        // Never wait for the lock: whoever holds it, the keystroke reaches the
+        // front app rather than queueing behind this process.
+        guard lock.try() else { return passthrough }
+        defer { lock.unlock() }
+        return decide(tapEvent, passing: passthrough)
+    }
+
+    private func decide(
+        _ tapEvent: TapEvent,
+        passing passthrough: Unmanaged<CGEvent>
+    ) -> Unmanaged<CGEvent>? {
         let now = ProcessInfo.processInfo.systemUptime
-
-        if let recorder {
-            let result = recorder.handle(tapEvent, at: now)
-            if result != .none {
-                DispatchQueue.main.async { [weak self] in self?.onRecorded?(result) }
-            }
-            return tapEvent.kind == .mouseDown ? passthrough : nil
+        if recorder != nil {
+            return record(tapEvent, at: now, passing: passthrough)
         }
-
         if recognizer.handle(tapEvent, at: now) == .fired {
             DebugLog.event("trigger fired session=\(session.isLive)")
             DispatchQueue.main.async { [weak self] in self?.onTrigger?() }
@@ -132,9 +197,41 @@ final class EventTap: @unchecked Sendable {
             // A double-tap fires on a modifier release, which must pass through.
             return tapEvent.kind == .keyDown ? nil : passthrough
         }
-
         session.handle(tapEvent)
         return passthrough
+    }
+
+    private func record(
+        _ tapEvent: TapEvent,
+        at now: TimeInterval,
+        passing passthrough: Unmanaged<CGEvent>
+    ) -> Unmanaged<CGEvent>? {
+        guard let recorder, now < recordingExpiry else {
+            DebugLog.event("recording outlived its panel → keys pass through")
+            endRecording(reporting: .cancel)
+            return passthrough
+        }
+        let result = recorder.handle(tapEvent, at: now)
+        if result != .none {
+            let report = onRecorded
+            DispatchQueue.main.async { report?(result) }
+        }
+        return tapEvent.kind == .mouseDown ? passthrough : nil
+    }
+
+    private func witnessKeyDown() {
+        let now = ProcessInfo.processInfo.systemUptime
+        lastKeyDown.withLock { $0 = now }
+    }
+
+    /// Caller holds the lock.
+    private func endRecording(reporting result: Recorder.Result = .none) {
+        let report = onRecorded
+        recorder = nil
+        onRecorded = nil
+        recordingExpiry = 0
+        guard result != .none else { return }
+        DispatchQueue.main.async { report?(result) }
     }
 }
 
