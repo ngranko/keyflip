@@ -23,6 +23,15 @@ final class FieldRewriter {
         case blindKeys = "blind keys"
     }
 
+    /// What the check for lost text did about it — kept apart from what it
+    /// found, because a repair the app would not take leaves the user's words
+    /// gone, and that is not a rewrite anyone should follow.
+    private enum Repair {
+        case unnecessary
+        case typed
+        case refused
+    }
+
     /// A rewrite is posted but not yet settled; a second trigger now would
     /// interleave with it.
     var isSettling: Bool { pendingWaits > 0 }
@@ -82,14 +91,13 @@ final class FieldRewriter {
         then done: @escaping (Bool) -> Void
     ) {
         if snapshot.reading.selectedText == target.text,
-           typeOverSelection(target, as: output, in: snapshot, via: .userSelection)
+           typeOverSelection(target, as: output, in: snapshot, via: .userSelection, then: done)
         {
-            done(true)
             return
         }
         guard !axWriteRefused.contains(snapshot.reading.app) else {
             DebugLog.event("ax write known-refused in \(snapshot.reading.app) → retype")
-            done(retype(target, as: output, in: snapshot))
+            retype(target, as: output, in: snapshot, then: done)
             return
         }
         switch writer.replace(snapshot, range: target.range, with: output) {
@@ -109,16 +117,21 @@ final class FieldRewriter {
     func typeOverMirror(
         _ target: (text: String, trailing: String),
         as output: String,
-        in app: String
-    ) -> Bool {
+        in app: String,
+        then done: @escaping (Bool) -> Void
+    ) {
         let erase = target.text.count + target.trailing.count
         let replacement = output + target.trailing
         let ok = writer.typeKeys(deleting: erase, with: replacement)
         DebugLog.event("\(Rung.blindKeys.rawValue): erase=\(erase) ok=\(ok)")
-        guard ok else { return false }
+        guard ok else {
+            done(false)
+            return
+        }
         session.replaceTail(erase, with: replacement)
-        settleKeys(expecting: output, in: app)
-        return true
+        // This is the path for fields that never report a value, so there is
+        // no before-and-after to read a loss out of.
+        settleKeys(expecting: output, in: app, wasShowing: "", then: done)
     }
 
     private func confirm(
@@ -205,12 +218,12 @@ final class FieldRewriter {
             if attempt > 0 {
                 DebugLog.event("field usable again after \(attempt) re-read(s)")
             }
-            done(retype(target, as: output, in: fresh))
+            retype(target, as: output, in: fresh, then: done)
             return
         }
         guard attempt < Self.recoverAttempts else {
             DebugLog.event("field never became usable after \(attempt) re-read(s)")
-            done(retype(target, as: output, in: snapshot))
+            retype(target, as: output, in: snapshot, then: done)
             return
         }
         holdTrigger(for: Self.recoverDelay) { [weak self] in
@@ -256,33 +269,44 @@ final class FieldRewriter {
     private func retype(
         _ target: Target,
         as output: String,
-        in snapshot: FieldSnapshot
-    ) -> Bool {
-        typeOverSelection(target, as: output, in: snapshot, via: .ourSelection)
-            || typeBlindFromMirror(target, as: output, in: snapshot)
+        in snapshot: FieldSnapshot,
+        then done: @escaping (Bool) -> Void
+    ) {
+        if typeOverSelection(target, as: output, in: snapshot, via: .ourSelection, then: done)
+            || typeBlindFromMirror(target, as: output, in: snapshot, then: done) { return }
+        done(false)
     }
 
     /// Put the target under a selection the field agrees with and type over it:
-    /// no range arithmetic and no caret assumptions.
+    /// no range arithmetic and no caret assumptions. The bool says whether this
+    /// rung took the rewrite, so the ladder stops here; `done` comes later,
+    /// once the keystrokes have settled.
     private func typeOverSelection(
         _ target: Target,
         as output: String,
         in snapshot: FieldSnapshot,
-        via rung: Rung
+        via rung: Rung,
+        then done: @escaping (Bool) -> Void
     ) -> Bool {
         guard writer.select(snapshot, range: target.range, expecting: target.text),
               writer.typeKeys(deleting: 0, with: output)
         else { return false }
         DebugLog.event("replace via \(rung.rawValue) ok=true")
         syncMirror(after: target.text, became: output)
-        settleKeys(expecting: output, in: snapshot.reading.app)
+        settleKeys(
+            expecting: output,
+            in: snapshot.reading.app,
+            wasShowing: snapshot.reading.value,
+            then: done
+        )
         return true
     }
 
     private func typeBlindFromMirror(
         _ target: Target,
         as output: String,
-        in snapshot: FieldSnapshot
+        in snapshot: FieldSnapshot,
+        then done: @escaping (Bool) -> Void
     ) -> Bool {
         guard let typed = session.lastRun, typed.text == target.text else {
             DebugLog.event("keys skipped: no selection and no matching mirror")
@@ -298,17 +322,46 @@ final class FieldRewriter {
         guard writer.typeKeys(deleting: erase, with: replacement) else { return false }
         DebugLog.event("replace via \(Rung.blindKeys.rawValue) erase=\(erase) ok=true")
         session.replaceTail(erase, with: replacement)
-        settleKeys(expecting: output, in: snapshot.reading.app)
+        settleKeys(
+            expecting: output,
+            in: snapshot.reading.app,
+            wasShowing: snapshot.reading.value,
+            then: done
+        )
         return true
     }
 
     /// Hold the trigger closed until synthesized keystrokes have reached the
-    /// app. Without it the keystroke paths returned with their events still
-    /// queued, and a second trigger — a user tapping again because nothing
-    /// visibly happened — converted the stale text twice.
-    private func settleKeys(expecting text: String, in app: String) {
+    /// app, and report the rewrite only then. Without the hold, the keystroke
+    /// paths returned with their events still queued, and a second trigger — a
+    /// user tapping again because nothing visibly happened — converted the
+    /// stale text twice. Without the late report, the caller switched the
+    /// input source while those same events were still in flight, which is the
+    /// one thing that touches the keyboard between the erase and the text
+    /// meant to replace it.
+    private func settleKeys(
+        expecting text: String,
+        in app: String,
+        wasShowing previous: String,
+        then done: @escaping (Bool) -> Void
+    ) {
         holdTrigger(for: Self.keySettle) { [weak self] in
-            self?.auditKeys(expecting: text, in: app)
+            guard let self else {
+                done(true)
+                return
+            }
+            switch restoreIfKeysVanished(expecting: text, in: app, wasShowing: previous) {
+            case .unnecessary:
+                done(true)
+            // The words are gone and the app would not take them back, so the
+            // caller must not follow: switching the layout now leaves the user
+            // in a foreign source with nothing to show for it.
+            case .refused:
+                done(false)
+            // The repair is keystrokes too, and needs the same room to land.
+            case .typed:
+                holdTrigger(for: Self.keySettle) { done(true) }
+            }
         }
     }
 
@@ -322,23 +375,41 @@ final class FieldRewriter {
         }
     }
 
-    /// The keystroke paths are blind, so read the field back once and log only
-    /// a disagreement: that line is the whole diagnosis for leftover text.
-    private func auditKeys(expecting text: String, in app: String) {
-        guard case .field(let snap) = reader.read(),
-              // A different app or field means this reads somewhere the rewrite
-              // never went.
-              snap.reading.app == app,
-              !snap.reading.value.isEmpty,
-              !snap.reading.value.contains(text),
-              // Monaco answers with the trailing token rather than the whole
-              // field: a readback contained *in* what we wrote is a truncated
-              // read, not missing text.
-              !text.contains(snap.reading.value)
-        else { return }
-        DebugLog.event(
-            "keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(snap.reading.value))"
-        )
+    /// The keystroke paths are blind, so read the field back once and act on
+    /// what it says. A disagreement is the whole diagnosis for leftover text.
+    /// A field left empty is worse than a diagnosis: the backspaces landed and
+    /// the replacement did not, so the trigger cost the user the words they
+    /// typed. Put them back — an empty field is the one reading where typing
+    /// again cannot double anything.
+    private func restoreIfKeysVanished(
+        expecting text: String,
+        in app: String,
+        wasShowing previous: String
+    ) -> Repair {
+        // A different app means this reads somewhere the rewrite never went.
+        guard case .field(let snap) = reader.read(), snap.reading.app == app else {
+            return .unnecessary
+        }
+        let value = snap.reading.value
+        switch KeyLanding.judge(
+            field: value,
+            wasShowing: previous,
+            expected: text,
+            mirror: session.typed
+        ) {
+        case .landed:
+            return .unnecessary
+        case .disagrees:
+            DebugLog.event("keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(value))")
+            return .unnecessary
+        case .vanished:
+            guard writer.typeKeys(deleting: 0, with: text) else {
+                DebugLog.event("keys vanished from \(app); retyping \(DebugLog.quote(text)) refused")
+                return .refused
+            }
+            DebugLog.event("keys vanished from \(app) → typed \(DebugLog.quote(text)) again")
+            return .typed
+        }
     }
 
     /// Keep the mirror in step after a rewrite it did not drive, or drop it: a

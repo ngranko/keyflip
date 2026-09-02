@@ -118,10 +118,15 @@ final class ConvertController {
         guard let conv = convert(target.text, slotA: slotA, slotB: slotB, via: " (keys)") else {
             return
         }
-        if conv.output != target.text {
-            guard rewriter.typeOverMirror(target, as: conv.output, in: app) else { return }
+        guard conv.output != target.text else {
+            follow(conv.destinationID)
+            return
         }
-        follow(conv.destinationID)
+        rewriter.typeOverMirror(target, as: conv.output, in: app) { [weak self] rewritten in
+            if rewritten {
+                self?.follow(conv.destinationID)
+            }
+        }
     }
 
     private func follow(_ destination: String) {
