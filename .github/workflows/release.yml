@@ -56,7 +56,7 @@ jobs:
     if: needs.version.outputs.changed == 'true' && needs.version.outputs.is_tagged != 'true'
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show toolchain
         run: swift --version
