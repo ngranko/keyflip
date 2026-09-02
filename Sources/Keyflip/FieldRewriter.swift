@@ -23,6 +23,15 @@ final class FieldRewriter {
         case blindKeys = "blind keys"
     }
 
+    /// What the check for lost text did about it — kept apart from what it
+    /// found, because a repair the app would not take leaves the user's words
+    /// gone, and that is not a rewrite anyone should follow.
+    private enum Repair {
+        case unnecessary
+        case typed
+        case refused
+    }
+
     /// A rewrite is posted but not yet settled; a second trigger now would
     /// interleave with it.
     var isSettling: Bool { pendingWaits > 0 }
@@ -337,14 +346,22 @@ final class FieldRewriter {
         then done: @escaping (Bool) -> Void
     ) {
         holdTrigger(for: Self.keySettle) { [weak self] in
-            guard let self,
-                  restoreIfKeysVanished(expecting: text, in: app, wasShowing: previous)
-            else {
+            guard let self else {
                 done(true)
                 return
             }
+            switch restoreIfKeysVanished(expecting: text, in: app, wasShowing: previous) {
+            case .unnecessary:
+                done(true)
+            // The words are gone and the app would not take them back, so the
+            // caller must not follow: switching the layout now leaves the user
+            // in a foreign source with nothing to show for it.
+            case .refused:
+                done(false)
             // The repair is keystrokes too, and needs the same room to land.
-            holdTrigger(for: Self.keySettle) { done(true) }
+            case .typed:
+                holdTrigger(for: Self.keySettle) { done(true) }
+            }
         }
     }
 
@@ -368,9 +385,11 @@ final class FieldRewriter {
         expecting text: String,
         in app: String,
         wasShowing previous: String
-    ) -> Bool {
+    ) -> Repair {
         // A different app means this reads somewhere the rewrite never went.
-        guard case .field(let snap) = reader.read(), snap.reading.app == app else { return false }
+        guard case .field(let snap) = reader.read(), snap.reading.app == app else {
+            return .unnecessary
+        }
         let value = snap.reading.value
         switch KeyLanding.judge(
             field: value,
@@ -379,13 +398,17 @@ final class FieldRewriter {
             mirror: session.typed
         ) {
         case .landed:
-            return false
+            return .unnecessary
         case .disagrees:
             DebugLog.event("keys audit: \(DebugLog.quote(text)) not in \(DebugLog.quote(value))")
-            return false
+            return .unnecessary
         case .vanished:
-            DebugLog.event("keys vanished from \(app) → typing \(DebugLog.quote(text)) again")
-            return writer.typeKeys(deleting: 0, with: text)
+            guard writer.typeKeys(deleting: 0, with: text) else {
+                DebugLog.event("keys vanished from \(app); retyping \(DebugLog.quote(text)) refused")
+                return .refused
+            }
+            DebugLog.event("keys vanished from \(app) → typed \(DebugLog.quote(text)) again")
+            return .typed
         }
     }
 

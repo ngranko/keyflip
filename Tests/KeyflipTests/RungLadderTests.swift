@@ -240,3 +240,21 @@ private struct Ladder {
     #expect(ladder.run())
     #expect(!writer.calls.contains(.typeKeys(deleting: 0, with: output)))
 }
+
+/// The repair is keystrokes at the same app that just dropped some: when it is
+/// refused too, the words are gone, and following the destination would strand
+/// the user in the other layout with nothing to show for the trigger.
+@MainActor
+@Test func aRefusedRepairIsNotReportedAsARewrite() {
+    let writer = ScriptedWriter()
+    writer.selectAnswers = [false]
+    writer.typeKeysAnswers = [true, false]
+    let ladder = Ladder(
+        writer: writer,
+        mirror: target.text,
+        alreadyRefused: [app],
+        readsBack: field(showing: "")
+    )
+    #expect(!ladder.run())
+    #expect(writer.calls.contains(.typeKeys(deleting: 0, with: output)))
+}
