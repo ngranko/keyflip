@@ -313,8 +313,11 @@ final class FieldRewriter {
             return false
         }
         // Deleting by count against a stale selection would eat the whole run.
-        guard writer.restoreCaret(snapshot) else {
-            DebugLog.event("keys skipped: caret not collapsed")
+        let caret = writer.restoreCaret(snapshot)
+        guard caret == .collapsed else {
+            DebugLog.event(
+                "keys skipped: \(caret == .selectionHeld ? "caret not collapsed" : "caret unreadable")"
+            )
             return false
         }
         let erase = typed.text.count + typed.trailing.count

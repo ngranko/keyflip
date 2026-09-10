@@ -19,7 +19,7 @@ final class ScriptedWriter: FieldWriter {
     var replaceAnswers: [FieldAccess.WriteAttempt] = [.wrote]
     var verifyAnswers: [FieldAccess.WriteCheck] = [.applied]
     var selectAnswers: [Bool] = [true]
-    var restoreCaretAnswers: [Bool] = [true]
+    var restoreCaretAnswers: [FieldAccess.CaretRestore] = [.collapsed]
     var typeKeysAnswers: [Bool] = [true]
 
     var verifyCount: Int { calls.filter { $0 == .verify }.count }
@@ -52,7 +52,7 @@ final class ScriptedWriter: FieldWriter {
         return next(&selectAnswers)
     }
 
-    func restoreCaret(_ snapshot: FieldSnapshot) -> Bool {
+    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore {
         calls.append(.restoreCaret)
         return next(&restoreCaretAnswers)
     }

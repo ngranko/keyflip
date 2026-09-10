@@ -70,7 +70,7 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
     let range = NSRange(location: 0, length: 4)
     #expect(FieldAccess.replace(snap, range: range, with: "comp") == .declined)
     #expect(!FieldAccess.select(snap, range: range, expecting: "сщьз"))
-    #expect(!FieldAccess.restoreCaret(snap))
+    #expect(FieldAccess.restoreCaret(snap) == .unreadable)
     if case .unreadable = FieldAccess.verify(snap, range: range, wrote: "comp", over: "сщьз") {
     } else {
         Issue.record("expected .unreadable")

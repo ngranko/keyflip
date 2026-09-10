@@ -21,7 +21,7 @@ protocol FieldWriter {
     ) -> FieldAccess.WriteCheck
 
     func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool
-    func restoreCaret(_ snapshot: FieldSnapshot) -> Bool
+    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore
     func typeKeys(deleting count: Int, with text: String) -> Bool
 }
 
@@ -47,7 +47,7 @@ struct AXFieldWriter: FieldWriter {
         FieldAccess.select(snapshot, range: range, expecting: text)
     }
 
-    func restoreCaret(_ snapshot: FieldSnapshot) -> Bool {
+    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore {
         FieldAccess.restoreCaret(snapshot)
     }
 

@@ -191,7 +191,20 @@ private struct Ladder {
 @Test func theBlindRungBacksOutWhenTheCaretIsNotCollapsed() {
     let writer = ScriptedWriter()
     writer.selectAnswers = [false]
-    writer.restoreCaretAnswers = [false]
+    writer.restoreCaretAnswers = [.selectionHeld]
+    let ladder = Ladder(writer: writer, mirror: target.text, alreadyRefused: [app])
+    #expect(!ladder.run())
+    #expect(!writer.calls.contains(.typeKeys(deleting: 4, with: output)))
+}
+
+/// A caret that cannot be read is not a caret known to be collapsed, so the
+/// rung backs out of that too — told apart from a held selection only in the
+/// log, which is where the two were once indistinguishable.
+@MainActor
+@Test func theBlindRungBacksOutWhenTheCaretCannotBeRead() {
+    let writer = ScriptedWriter()
+    writer.selectAnswers = [false]
+    writer.restoreCaretAnswers = [.unreadable]
     let ladder = Ladder(writer: writer, mirror: target.text, alreadyRefused: [app])
     #expect(!ladder.run())
     #expect(!writer.calls.contains(.typeKeys(deleting: 4, with: output)))

@@ -200,15 +200,33 @@ enum FieldAccess {
         return false
     }
 
-    /// Put the caret back where the snapshot found it, false when it cannot be
-    /// proven collapsed. A refused write can leave its selection behind, and
-    /// one backspace against that eats the whole run.
-    static func restoreCaret(_ snapshot: FieldSnapshot) -> Bool {
-        guard let element = snapshot.handle.element else { return false }
+    enum CaretRestore: Equatable {
+        case collapsed
+        case selectionHeld
+        case unreadable
+    }
+
+    /// Put the caret back where the snapshot found it, and prove it collapsed.
+    /// A refused write can leave its selection behind, and one backspace
+    /// against that eats the whole run.
+    ///
+    /// Retried for the same reason `select` is: the rung above leaves a
+    /// selection on the field, and an app that bridges Accessibility through
+    /// another process — Slack, Zen — answers the read that follows a write
+    /// from before it. Trusting one immediate readback abandoned the rewrite
+    /// on state that was already correct, and the user's second attempt, a
+    /// second later, always worked.
+    static func restoreCaret(_ snapshot: FieldSnapshot) -> CaretRestore {
+        guard let element = snapshot.handle.element else { return .unreadable }
         let caret = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
-        _ = setRange(element, caret)
-        guard let now = selectedRange(element) else { return false }
-        return now.length == 0
+        var last = CaretRestore.unreadable
+        for _ in 0..<3 {
+            guard setRange(element, caret) else { continue }
+            guard let now = selectedRange(element) else { continue }
+            if now.length == 0 { return .collapsed }
+            last = .selectionHeld
+        }
+        return last
     }
 
     private static func slice(_ value: NSString, at location: Int, length: Int) -> String? {
