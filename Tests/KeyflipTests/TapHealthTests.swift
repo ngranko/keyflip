@@ -7,34 +7,50 @@ import Testing
 struct TapHealthTests {
     @Test func aTapThatTimedOutOnceIsPutBack() {
         var health = TapHealth()
-        let first = health.survivesTimeout(at: 100)
+        let first = health.survivesTimeout(at: 100, mayDeleteEvents: true)
         #expect(first)
     }
 
     @Test func aTapThatKeepsTimingOutIsGivenUpOn() {
         var health = TapHealth()
-        let survivals = [100.0, 101].map { health.survivesTimeout(at: $0) }
+        let survivals = [100.0, 101].map { health.survivesTimeout(at: $0, mayDeleteEvents: true) }
         #expect(survivals == [true, false])
     }
 
     @Test func timeoutsAnHourApartAreNotTheSameFault() {
         var health = TapHealth()
-        let survivals = [100.0, 3_600].map { health.survivesTimeout(at: $0) }
+        let survivals = [100.0, 3_600].map { health.survivesTimeout(at: $0, mayDeleteEvents: true) }
         #expect(survivals == [true, true])
     }
 
     @Test func aTimeoutAMinuteOnIsPastTheWindow() {
         var health = TapHealth()
-        let survivals = [100.0, 160].map { health.survivesTimeout(at: $0) }
+        let survivals = [100.0, 160].map { health.survivesTimeout(at: $0, mayDeleteEvents: true) }
         #expect(survivals == [true, true])
+    }
+
+    @Test func aListeningTapIsNeverGivenUpOn() {
+        var health = TapHealth()
+        let survivals = (0..<10).map {
+            health.survivesTimeout(at: 100 + Double($0), mayDeleteEvents: false)
+        }
+        #expect(survivals.allSatisfy { $0 })
+    }
+
+    @Test func strikesAgainstAListeningTapDoNotCountAgainstADeletingOne() {
+        var health = TapHealth()
+        _ = health.survivesTimeout(at: 100, mayDeleteEvents: false)
+        _ = health.survivesTimeout(at: 101, mayDeleteEvents: false)
+        let firstRealStrike = health.survivesTimeout(at: 102, mayDeleteEvents: true)
+        #expect(firstRealStrike)
     }
 
     @Test func aTapArmedAfreshStartsWithACleanRecord() {
         var health = TapHealth()
-        _ = health.survivesTimeout(at: 100)
-        _ = health.survivesTimeout(at: 101)
+        _ = health.survivesTimeout(at: 100, mayDeleteEvents: true)
+        _ = health.survivesTimeout(at: 101, mayDeleteEvents: true)
         health.forget()
-        let afterRearm = health.survivesTimeout(at: 102)
+        let afterRearm = health.survivesTimeout(at: 102, mayDeleteEvents: true)
         #expect(afterRearm)
     }
 }

@@ -122,11 +122,16 @@ final class TapPort: @unchecked Sendable {
         giveUp("tap timed out")
     }
 
-    /// Take the tap away over evidence it held someone's input. A second strike
-    /// inside the minute is a pattern rather than a hiccup, and retires it.
+    /// Take the tap away over evidence it stopped answering for its events.
+    /// What that cost decides the penalty: a tap that may delete was holding
+    /// someone's input, and a second strike inside the minute retires it. A
+    /// listening one held nothing, so it is replaced as often as it takes.
     func giveUp(_ reason: String) {
         lock.lock()
-        let healthy = health.survivesTimeout(at: ProcessInfo.processInfo.systemUptime)
+        let healthy = health.survivesTimeout(
+            at: ProcessInfo.processInfo.systemUptime,
+            mayDeleteEvents: options == .defaultTap
+        )
         retired = !healthy
         lock.unlock()
 
