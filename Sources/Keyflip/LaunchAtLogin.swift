@@ -2,26 +2,42 @@ import Foundation
 import ServiceManagement
 
 enum LaunchAtLogin {
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
+    enum Result: Equatable {
+        case changed
+        case requiresApproval
+        case failed(domain: String, code: Int)
     }
 
-    static func toggle() {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    static var needsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
+
+    static func toggle() -> Result {
         let service = SMAppService.mainApp
-        switch service.status {
-        case .enabled:
-            try? service.unregister()
-        case .requiresApproval:
-            SMAppService.openSystemSettingsLoginItems()
-        default:
-            do {
-                try service.register()
-            } catch {
-                let ns = error as NSError
-                if ns.code == Int(kSMErrorLaunchDeniedByUser) || service.status == .requiresApproval {
-                    SMAppService.openSystemSettingsLoginItems()
-                }
+        let result = change(status: service.status, register: { try service.register() },
+                            unregister: { try service.unregister() })
+        return needsApproval ? .requiresApproval : result
+    }
+
+    static func change(status: SMAppService.Status, register: () throws -> Void,
+                       unregister: () throws -> Void) -> Result {
+        if status == .requiresApproval { return .requiresApproval }
+        do {
+            if status == .enabled { try unregister() } else { try register() }
+            return .changed
+        } catch {
+            let error = error as NSError
+            if requiresApproval(error) {
+                return .requiresApproval
             }
+            return .failed(domain: error.domain, code: error.code)
         }
     }
+
+    private static func requiresApproval(_ error: NSError) -> Bool {
+        guard error.code == Int(kSMErrorLaunchDeniedByUser) else { return false }
+        if #available(macOS 15, *), error.domain == SMAppServiceErrorDomain { return true }
+        return error.domain == kSMErrorDomainFramework as String
+    }
+
+    static func openSettings() { SMAppService.openSystemSettingsLoginItems() }
 }

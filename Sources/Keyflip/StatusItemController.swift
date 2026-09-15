@@ -114,6 +114,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         tap.rearm()
         if !tap.start() {
             DebugLog.event("manual tap retry refused")
+            UserFeedback.showMonitoringFailure()
         }
     }
 
@@ -151,7 +152,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         let trigger = NSMenuItem(title: "Set trigger… (\(settings.trigger.glyph))", action: #selector(setTrigger), keyEquivalent: "")
         trigger.target = self
         menu.addItem(trigger)
-        let login = NSMenuItem(title: "Launch at login", action: #selector(toggleLogin), keyEquivalent: "")
+        let login = NSMenuItem(title: LaunchAtLogin.needsApproval ? "Launch at login: approval needed…" : "Launch at login", action: #selector(toggleLogin), keyEquivalent: "")
         login.target = self
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         menu.addItem(login)
@@ -162,9 +163,31 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in self?.beginRecording() }
     }
 
-    @objc private func toggleLogin() { LaunchAtLogin.toggle() }
+    @objc private func toggleLogin() {
+        switch LaunchAtLogin.toggle() {
+        case .changed: break
+        case .requiresApproval: LaunchAtLogin.openSettings()
+        case .failed(let domain, let code):
+            DebugLog.event("login item failed domain=\(domain) code=\(code)")
+            UserFeedback.show(title: "Could not change launch at login",
+                              message: "Move Keyflip to Applications, then try again. You can also check System Settings → General → Login Items. Error: \(domain) \(code).")
+        }
+    }
+
+    @objc private func copyDiagnostics() {
+        let report = DiagnosticReport.capture(settings: settings, pair: pair, tap: tap)
+        NSPasteboard.general.clearContents()
+        if !NSPasteboard.general.setString(report.render(log: DebugLog.snapshot()), forType: .string) {
+            UserFeedback.show(title: "Could not copy diagnostics", message: "Try again, or copy the contents of Show debug log instead.")
+        }
+    }
 
     private func addFooter(to menu: NSMenu) {
+        for (title, action) in [("Copy diagnostic report", #selector(copyDiagnostics))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
         let log = NSMenuItem(
             title: "Show debug log…",
             action: #selector(showDebugLog),
