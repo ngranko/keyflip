@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 # Two pushes in quick succession must not race for the same tag.
 concurrency:
@@ -14,22 +14,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    uses: ./.github/workflows/test.yml
+
   version:
     name: Calculate version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.semver.outputs.version }}
-      tag: ${{ steps.semver.outputs.version_tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
       changed: ${{ steps.semver.outputs.changed }}
-      is_tagged: ${{ steps.semver.outputs.is_tagged }}
+      is_tagged: ${{ steps.resolve.outputs.is_tagged }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Calculate semantic version
         id: semver
-        uses: PaulHatch/semantic-version@v6.0.2
+        uses: PaulHatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: "v"
           major_pattern: "(MAJOR)"
@@ -42,6 +46,22 @@ jobs:
           debug: false
           bump_each_commit_patch_pattern: ""
 
+      - name: Reuse a release tag on this commit
+        id: resolve
+        env:
+          VERSION: ${{ steps.semver.outputs.version }}
+          TAG: ${{ steps.semver.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          existing=$(git tag --points-at HEAD --list 'v*' --sort=-version:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+          if [ -n "$existing" ]; then
+            TAG="$existing"
+            VERSION="${existing#v}"
+            echo 'is_tagged=true' >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Report
         env:
           TAG: ${{ steps.semver.outputs.version_tag }}
@@ -51,12 +71,17 @@ jobs:
 
   release:
     name: Build and release
-    needs: version
-    # Nothing new to ship, or this commit already carries its release tag.
-    if: needs.version.outputs.changed == 'true' && needs.version.outputs.is_tagged != 'true'
+    needs: [version, validate]
+    # A failed upload may have left the tag behind; reruns must finish publishing it.
+    if: needs.version.outputs.changed == 'true' || needs.version.outputs.is_tagged == 'true'
+    permissions:
+      contents: write
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+        with:
+          fetch-depth: 0
 
       - name: Show toolchain
         run: swift --version
@@ -93,6 +118,9 @@ jobs:
       - name: Build app bundle
         run: make app
 
+      - name: Verify public app architectures
+        run: bash Tools/release/verify-support.sh .build/Keyflip.app/Contents/MacOS/Keyflip .build/Keyflip.app/Contents/Info.plist
+
       - name: Stamp version into the bundle
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -121,10 +149,15 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $VERSION"
-          git push origin "refs/tags/$TAG"
+          if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$TAG")" = "$(git rev-parse HEAD)"
+          else
+            git tag -a "$TAG" -m "Release $VERSION"
+            git push origin "refs/tags/$TAG"
+          fi
 
       - name: Create release
         env:
@@ -144,8 +177,20 @@ jobs:
           - run `xattr -dr com.apple.quarantine /Applications/Keyflip.app`.
           NOTE
           # --generate-notes appends GitHub's own changelog under the note above.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+            exit 0
+          fi
           gh release create "$TAG" "$ZIP" \
             --title "Keyflip $VERSION" \
             --notes-file install-note.md \
             --generate-notes \
             --verify-tag
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/signing.p12"
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          fi

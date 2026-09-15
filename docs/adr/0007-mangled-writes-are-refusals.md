@@ -1,5 +1,7 @@
 # A write that mangles the field is a refusal, not an unknown
 
+Current behavior is specified in [ADR 0010](0010-bounded-rewrites-and-native-settings.md). This document records the earlier decision.
+
 ADR 0006 made every Accessibility write verify itself by re-reading the field, and split the answer three ways: the text we wrote (applied), the text that was there before (refused), or anything else (unknown). Unknown assumed the write had landed, on the reasoning that doubling the text is worse than not converting it.
 
 That reasoning holds for one of the two things unknown was covering. A field that will not read back at all — an empty `AXValue` in a terminal or an Electron editor — tells us nothing, and retyping over a write that did land would double the run. But a field that reads back as *neither* the original nor the output is not silent, it is damaged: the write went in and took the run with it.

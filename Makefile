@@ -1,7 +1,8 @@
 SWIFT := swift
+SWIFT_FLAGS ?=
 APP := .build/Keyflip.app
 ZIP := Keyflip.zip
-BIN := $(shell $(SWIFT) build -c release --show-bin-path)/Keyflip
+UNIVERSAL_BIN := .build/universal/Keyflip
 
 # TCC pins the Accessibility grant to whatever identity signed the bundle, so a
 # stable certificate keeps the grant across rebuilds where ad-hoc signing re-pins
@@ -10,18 +11,33 @@ BIN := $(shell $(SWIFT) build -c release --show-bin-path)/Keyflip
 SIGN_ID ?= Keyflip Self-Signed
 IDENTITY = $(shell security find-identity -p codesigning | grep -qF "$(SIGN_ID)" && echo "$(SIGN_ID)" || echo -)
 
-.PHONY: test build app sign run install clean icon glass zip archive
+.PHONY: test build build-universal verify-universal app sign run install clean icon glass zip archive
 
 test:
-	$(SWIFT) test
+	$(SWIFT) test $(SWIFT_FLAGS)
 
 build:
-	$(SWIFT) build -c release
+	$(SWIFT) build -c release $(SWIFT_FLAGS)
 
-app: build
+# Separate builds also work with Command Line Tools, without Xcode's build service.
+build-universal:
+	@set -eu; for arch in arm64 x86_64; do \
+		$(SWIFT) build -c release --product Keyflip --triple "$$arch-apple-macosx13.0" --scratch-path ".build/release-$$arch" $(SWIFT_FLAGS); \
+	done
+	mkdir -p .build/universal
+	@set -eu; \
+	arm=$$($(SWIFT) build -c release --triple arm64-apple-macosx13.0 --scratch-path .build/release-arm64 $(SWIFT_FLAGS) --show-bin-path); \
+	intel=$$($(SWIFT) build -c release --triple x86_64-apple-macosx13.0 --scratch-path .build/release-x86_64 $(SWIFT_FLAGS) --show-bin-path); \
+	lipo -create "$$arm/Keyflip" "$$intel/Keyflip" -output $(UNIVERSAL_BIN)
+	@$(MAKE) --no-print-directory verify-universal
+
+verify-universal:
+	bash Tools/release/verify-support.sh $(UNIVERSAL_BIN)
+
+app: build-universal
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS
-	cp $(BIN) $(APP)/Contents/MacOS/Keyflip
+	cp $(UNIVERSAL_BIN) $(APP)/Contents/MacOS/Keyflip
 	cp App/Info.plist $(APP)/Contents/Info.plist
 	@if [ -f App/Keyflip.icns ]; then \
 		mkdir -p $(APP)/Contents/Resources; \
