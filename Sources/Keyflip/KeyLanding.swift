@@ -6,8 +6,9 @@ import Foundation
 /// server does between the two halves can drop one of them. Reading the field
 /// back afterwards is the only way to find out which half arrived.
 enum KeyLanding {
-    /// The field holds the text, or holds too little to argue with.
+    /// The readback confirms the expected replacement.
     case landed
+    case unverifiable
     /// The field kept the erase and nothing else: the words are gone.
     case vanished
     /// The field holds something else — worth a log line, not a second guess
@@ -24,14 +25,22 @@ enum KeyLanding {
         field value: String,
         wasShowing previous: String,
         expected text: String,
-        mirror: String
+        mirror: String,
+        replacing range: NSRange? = nil
     ) -> KeyLanding {
-        if value.contains(text) { return .landed }
+        if let range, !previous.isEmpty {
+            let before = previous as NSString
+            guard range.location >= 0, range.length >= 0, range.upperBound <= before.length else { return .disagrees }
+            if value == before.replacingCharacters(in: range, with: text) { return .landed }
+            if value.contains(text) { return .disagrees }
+            // A partial document loss cannot be repaired by reinserting just the target.
+            if value.allSatisfy(\.isWhitespace), range.length != before.length { return .disagrees }
+        } else if !text.isEmpty, value.contains(text) { return .landed }
         // Monaco answers with the trailing token rather than the whole field:
         // a readback contained *in* what we wrote is a truncated read.
-        if !value.isEmpty, text.contains(value) { return .landed }
+        if !value.isEmpty, text.contains(value) { return .unverifiable }
         guard value.allSatisfy(\.isWhitespace) else { return .disagrees }
-        guard !previous.isEmpty else { return .landed }
+        guard !previous.isEmpty else { return .unverifiable }
         return mirror.contains(text) ? .vanished : .disagrees
     }
 }

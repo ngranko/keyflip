@@ -15,6 +15,11 @@ public final class TypingSession: @unchecked Sendable {
     private let lock = NSLock()
     private var live = false
     private var mirror = ""
+    private var revision: UInt64 = 0
+    private var lastReset: SessionResetReason?
+    private let onReset: @Sendable (SessionReset) -> Void
+
+    public var inputRevision: UInt64 { locked { revision } }
 
     public var isLive: Bool { locked { live } }
 
@@ -23,37 +28,47 @@ public final class TypingSession: @unchecked Sendable {
     /// cannot be trusted.
     public var typed: String { locked { mirror } }
 
-    public init() {}
-
-    public func end() {
-        locked { reset() }
+    public init(onReset: @escaping @Sendable (SessionReset) -> Void = { _ in }) {
+        self.onReset = onReset
     }
+
+    public func end(reason: SessionResetReason = .explicit) {
+        report(locked {
+            revision &+= 1
+            return reset(reason: reason)
+        })
+    }
+
+    // Internal rewrites change the mirror without witnessing new user input.
+    public func discardMirror() { report(locked { reset(reason: .mirrorDiscarded) }) }
 
     /// Keep the mirror in step after synthesized keys have been sent.
     public func replaceTail(_ count: Int, with text: String) {
-        locked {
+        report(locked {
             // Erasing more than the mirror holds means it never described the
             // field, and the blind path would later delete by that guess.
             guard count <= mirror.count else {
-                reset()
-                return
+                return reset(reason: .mirrorMismatch)
             }
             mirror.removeLast(count)
             mirror += text
-        }
+            return nil
+        })
     }
 
     public func handle(_ event: TapEvent) {
-        locked {
+        report(locked {
             switch event.kind {
             case .mouseDown:
-                reset()
-            case .flagsChanged:
-                break
+                revision &+= 1
+                return reset(reason: .mouseDown)
+            case .flagsChanged, .keyUp:
+                return nil
             case .keyDown:
-                handleKeyDown(event)
+                revision &+= 1
+                return handleKeyDown(event)
             }
-        }
+        })
     }
 
     private func locked<T>(_ body: () -> T) -> T {
@@ -62,34 +77,44 @@ public final class TypingSession: @unchecked Sendable {
         return body()
     }
 
-    private func reset() {
+    private func reset(reason: SessionResetReason) -> SessionReset? {
+        let changed = live || !mirror.isEmpty || lastReset != reason
+        let reset = SessionReset(reason: reason, wasLive: live, mirroredUTF16: mirror.utf16.count, revision: revision)
         live = false
         mirror = ""
+        lastReset = reason
+        return changed ? reset : nil
+    }
+
+    private func report(_ reset: SessionReset?) {
+        // Logging must never execute while the typing-state lock is held.
+        if let reset { onReset(reset) }
     }
 
     /// Callers hold the lock.
-    private func handleKeyDown(_ event: TapEvent) {
-        if isShortcut(event) || endsTheRun(event.keyCode) {
-            reset()
-            return
+    private func handleKeyDown(_ event: TapEvent) -> SessionReset? {
+        if let reason = chooseResetReason(for: event) {
+            return reset(reason: reason)
         }
         if event.keyCode == Key.backspace {
             // Backspace never starts a session, but it does shorten one.
             if live, !mirror.isEmpty {
                 mirror.removeLast()
             }
-            return
+            return mirror.isEmpty ? reset(reason: .backspaceExhausted) : nil
         }
-        live = true
         if Self.isTypable(event.characters) {
+            live = true
+            lastReset = nil
             mirror += event.characters
             if mirror.count > Self.limit {
                 mirror.removeFirst(mirror.count - Self.limit)
             }
         } else {
-            // No text we can account for, so the mirror no longer matches.
-            mirror = ""
+            // Unknown input cannot authorize edits to text from an earlier session.
+            return reset(reason: event.characters.isEmpty ? .emptyKeyText : .nonTextKey)
         }
+        return nil
     }
 
     /// Text the app would have inserted. Excludes control characters and the
@@ -101,16 +126,15 @@ public final class TypingSession: @unchecked Sendable {
         }
     }
 
-    private func isShortcut(_ event: TapEvent) -> Bool {
-        let command = event.independentFlags & (1 << 20) != 0
-        let control = event.independentFlags & (1 << 18) != 0
-        return command || control
-    }
-
-    /// Keys after which the mirror would describe text the caret is no longer
-    /// in front of.
-    private func endsTheRun(_ keyCode: UInt16) -> Bool {
-        keyCode == Key.forwardDelete || isCaretMoving(keyCode) || isCommitOrCancel(keyCode)
+    private func chooseResetReason(for event: TapEvent) -> SessionResetReason? {
+        if event.keyCode == Key.backspace, event.independentFlags & Trigger.relevantModifiers != 0 {
+            return .modifiedDeletion
+        }
+        if event.independentFlags & ((1 << 20) | (1 << 18)) != 0 { return .shortcut }
+        if event.keyCode == Key.forwardDelete { return .forwardDelete }
+        if isCaretMoving(event.keyCode) { return .caretMovement }
+        if isCommitOrCancel(event.keyCode) { return .commitOrCancel }
+        return nil
     }
 
     private func isCaretMoving(_ keyCode: UInt16) -> Bool {

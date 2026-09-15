@@ -66,11 +66,11 @@ private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
 /// A reading with no field handle was never an app we could ask, so every
 /// write against it declines — the case the refusal list must not record.
 @Test func writesAgainstAHandlelessReadingDecline() {
-    let snap = snapshot(reading(value: "сщьз", caret: 4))
+    let snap = FieldSnapshot(handle: .none, reading: reading(value: "сщьз", caret: 4))
     let range = NSRange(location: 0, length: 4)
     #expect(FieldAccess.replace(snap, range: range, with: "comp") == .declined)
     #expect(!FieldAccess.select(snap, range: range, expecting: "сщьз"))
-    #expect(FieldAccess.restoreCaret(snap) == .unreadable)
+    #expect(FieldAccess.restoreCaret(snap, expecting: "сщьз") == .unreadable)
     if case .unreadable = FieldAccess.verify(snap, range: range, wrote: "comp", over: "сщьз") {
     } else {
         Issue.record("expected .unreadable")

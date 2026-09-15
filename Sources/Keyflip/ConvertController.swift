@@ -34,8 +34,7 @@ final class ConvertController {
             "listenEvent=\(CGPreflightListenEventAccess()) " +
             "path=\(Permissions.bundlePath) " +
             "pair=\(pair.slotA ?? "nil")/\(pair.slotB ?? "nil") " +
-            "trigger=\(settings.trigger.glyph) maps=\(pair.loadedMapCount) " +
-            "axRefused=\(settings.axWriteRefused.sorted().joined(separator: ",") )"
+            "trigger=\(settings.trigger.glyph) maps=\(pair.loadedMapCount) "
         )
     }
 
@@ -50,7 +49,9 @@ final class ConvertController {
         }
         let (slotA, slotB) = (maps.slotA, maps.slotB)
 
+        let revision = tap.session.inputRevision
         let read = reader.read()
+        guard tap.session.inputRevision == revision else { return }
         Permissions.promptIfAccessibilityLapsed(available: read.accessibilityAvailable)
 
         switch read {
@@ -59,17 +60,25 @@ final class ConvertController {
             DebugLog.event("field: no focus → toggle")
             togglePair()
         case .unavailable:
+            tap.session.end(reason: .accessibilityUnavailable)
             // ADR 0004: a permission failure neither converts nor follows.
             DebugLog.event("field: accessibility unavailable → silent")
-        case .markedText, .secure:
-            // In-flight IME composition and secure input are designed to fail.
-            DebugLog.event("field: blocked → silent")
-        case .field(let snap):
+        case .unsupported:
+            tap.session.end(reason: .accessibilityUnavailable)
+            DebugLog.event("field exceeds Accessibility budget → skip")
+        case .markedText:
+            tap.session.end(reason: .markedText)
+            DebugLog.event("field: marked text → silent")
+        case .secure:
+            tap.session.end(reason: .secureInput)
+            DebugLog.event("field: secure input → silent")
+        case .field(var snap):
+            snap.inputRevision = revision
             let reading = snap.reading
             DebugLog.event(
                 "field: app=\(reading.app) role=\(reading.role) " +
-                "value=\(DebugLog.quote(reading.value)) " +
-                "sel=\(reading.selectedRange) selected=\(DebugLog.quote(reading.selectedText))"
+                "value=\(DebugLog.describeText(reading.value)) " +
+                "sel=\(reading.selectedRange) selected=\(DebugLog.describeText(reading.selectedText))"
             )
             convertField(snap, slotA: slotA, slotB: slotB)
         }
@@ -83,7 +92,7 @@ final class ConvertController {
         case .mirror(let text, let trailing):
             applyTyped(
                 (text: text, trailing: trailing),
-                in: snap.reading.app,
+                in: snap,
                 slotA: slotA,
                 slotB: slotB
             )
@@ -98,11 +107,11 @@ final class ConvertController {
         switch note {
         case .caretDisagreed(let field, let mirror, let keptMirror):
             DebugLog.event(
-                "caret disagrees with mirror: field \(DebugLog.quote(field)) " +
-                "vs typed \(DebugLog.quote(mirror)) → \(keptMirror ? "keys" : "no rewrite")"
+                "caret disagrees with mirror: field \(DebugLog.describeText(field)) " +
+                "vs typed \(DebugLog.describeText(mirror)) → \(keptMirror ? "keys" : "no rewrite")"
             )
         case .fieldHidesStartOfRun(let mirror):
-            DebugLog.event("field shows only the tail of \(DebugLog.quote(mirror)) → keys")
+            DebugLog.event("field shows only the tail of \(DebugLog.describeText(mirror)) → keys")
         case .noTarget(let sessionLive):
             DebugLog.event("no target (session=\(sessionLive)) → toggle")
         }
@@ -110,11 +119,11 @@ final class ConvertController {
 
     private func applyTyped(
         _ target: (text: String, trailing: String),
-        in app: String,
+        in snapshot: FieldSnapshot,
         slotA: LayoutMap,
         slotB: LayoutMap
     ) {
-        DebugLog.event("target: typed \(DebugLog.quote(target.text))")
+        DebugLog.event("target: typed \(DebugLog.describeText(target.text))")
         guard let conv = convert(target.text, slotA: slotA, slotB: slotB, via: " (keys)") else {
             return
         }
@@ -122,8 +131,8 @@ final class ConvertController {
             follow(conv.destinationID)
             return
         }
-        rewriter.typeOverMirror(target, as: conv.output, in: app) { [weak self] rewritten in
-            if rewritten {
+        rewriter.typeOverMirror(target, as: conv.output, in: snapshot) { [weak self] rewritten in
+            if rewritten.shouldFollow {
                 self?.follow(conv.destinationID)
             }
         }
@@ -151,7 +160,7 @@ final class ConvertController {
         slotA: LayoutMap,
         slotB: LayoutMap
     ) {
-        DebugLog.event("target: \(DebugLog.quote(target.text)) range=\(target.range)")
+        DebugLog.event("target: \(DebugLog.describeText(target.text)) range=\(target.range)")
         guard let conv = convert(target.text, slotA: slotA, slotB: slotB) else { return }
         guard conv.output != target.text else {
             // Follow whenever conversion ran, even when no character changed.
@@ -161,7 +170,7 @@ final class ConvertController {
         // Follow only once the rewrite has settled, so the layout does not
         // change 150ms before the text it belongs to.
         rewriter.rewrite(target, to: conv.output, in: snapshot) { [weak self] rewritten in
-            if rewritten {
+            if rewritten.shouldFollow {
                 self?.follow(conv.destinationID)
             }
         }
@@ -182,12 +191,12 @@ final class ConvertController {
             slotB: slotB,
             currentSourceID: InputSources.currentID()
         ) else {
-            DebugLog.event("convert: noOp \(DebugLog.quote(text))")
+            DebugLog.event("convert: noOp \(DebugLog.describeText(text))")
             return nil
         }
         DebugLog.event(
             "convert: \(conv.fromSourceID) → \(conv.destinationID) " +
-            "\(DebugLog.quote(text)) → \(DebugLog.quote(conv.output))\(route)"
+            "\(DebugLog.describeText(text)) → \(DebugLog.describeText(conv.output))\(route)"
         )
         return conv
     }

@@ -18,7 +18,12 @@ import os
 final class EventTap: @unchecked Sendable {
     var onTrigger: (() -> Void)?
 
-    let session = TypingSession()
+    let session = TypingSession { reset in
+        DebugLog.event(
+            "session cleared reason=\(reset.reason.rawValue) wasLive=\(reset.wasLive) " +
+            "mirroredUTF16=\(reset.mirroredUTF16) revision=\(reset.revision)"
+        )
+    }
     let recognizer: TriggerRecognizer
 
     /// A panel left open — or an app that stalled with one open — must not go
@@ -26,7 +31,7 @@ final class EventTap: @unchecked Sendable {
     private static let recordingLimit: TimeInterval = 60
 
     private var port: TapPort!
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
     /// Stamped before anything that could fail or wait, so it witnesses the
     /// keystroke even when the rest of the callback declines to touch it.
     private let lastKeyDown = OSAllocatedUnfairLock(initialState: TimeInterval(0))
@@ -51,6 +56,7 @@ final class EventTap: @unchecked Sendable {
 
     private static let mask: CGEventMask =
         (1 << CGEventType.keyDown.rawValue)
+        | (1 << CGEventType.keyUp.rawValue)
         | (1 << CGEventType.flagsChanged.rawValue)
         | (1 << CGEventType.leftMouseDown.rawValue)
         | (1 << CGEventType.rightMouseDown.rawValue)
@@ -58,7 +64,9 @@ final class EventTap: @unchecked Sendable {
 
     init(trigger: Trigger, interval: TimeInterval) {
         recognizer = TriggerRecognizer(trigger: trigger, interval: interval)
-        port = TapPort(mask: Self.mask) { [weak self] type, event in
+        port = TapPort(mask: Self.mask, observationGap: { [weak self] in
+            self?.session.end(reason: .tapBusy)
+        }) { [weak self] type, event in
             guard let self else { return Unmanaged.passUnretained(event) }
             return self.handle(type: type, event: event)
         }
@@ -67,18 +75,25 @@ final class EventTap: @unchecked Sendable {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.session.end()
+            self?.session.end(reason: .appActivated)
+            self?.cancelRecordingAfterAppSwitch()
         }
     }
 
     @discardableResult
     func start() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        session.end(reason: .tapStarted)
         witnessKeyDown()
         return port.start(neededMode())
     }
 
     /// Hands the tap over on evidence it is holding input; see `TapPort`.
-    func giveUp(_ reason: String) { port.giveUp(reason) }
+    func giveUp(_ reason: String) {
+        session.end(reason: .tapRetired)
+        port.giveUp(reason)
+    }
 
     /// How long since a keystroke reached this tap.
     var secondsSinceKeyDown: TimeInterval {
@@ -87,10 +102,14 @@ final class EventTap: @unchecked Sendable {
 
     /// Leaves the process with no way to touch anyone's input.
     func stop() {
+        lock.lock()
+        defer { lock.unlock() }
         port.stop()
-        session.end()
+        session.end(reason: .tapStopped)
         stopRecording()
+        lock.lock()
         recognizer.reset()
+        lock.unlock()
     }
 
     func rearm() { port.rearm() }
@@ -132,11 +151,13 @@ final class EventTap: @unchecked Sendable {
 
     /// A tap cannot be given new powers, only replaced by one that has them.
     private func matchModeToWork() {
+        lock.lock()
+        defer { lock.unlock() }
         let wanted = neededMode()
         guard let mode = port.mode, mode != wanted else { return }
         DebugLog.event("tap mode → \(wanted == .listenOnly ? "listen only" : "may delete")")
-        port.stop()
-        port.start(wanted)
+        session.end(reason: .tapStopped)
+        port.replace(with: wanted)
     }
 
     /// While recording, keystrokes go to the recorder and are swallowed, so
@@ -146,6 +167,14 @@ final class EventTap: @unchecked Sendable {
         onRecorded = onResult
         recorder = Recorder(interval: interval)
         recordingExpiry = ProcessInfo.processInfo.systemUptime + Self.recordingLimit
+        lock.unlock()
+        matchModeToWork()
+    }
+
+    private func cancelRecordingAfterAppSwitch() {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        lock.lock()
+        endRecording(reporting: .cancel)
         lock.unlock()
         matchModeToWork()
     }
@@ -163,6 +192,7 @@ final class EventTap: @unchecked Sendable {
 
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             DebugLog.event("tap disabled by \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
+            session.end(reason: .tapDisabled)
             port.recoverFromDisable(type)
             return passthrough
         }
@@ -177,7 +207,10 @@ final class EventTap: @unchecked Sendable {
 
         // Never wait for the lock: whoever holds it, the keystroke reaches the
         // front app rather than queueing behind this process.
-        guard lock.try() else { return passthrough }
+        guard lock.try() else {
+            session.end(reason: .tapBusy)
+            return passthrough
+        }
         defer { lock.unlock() }
         return decide(tapEvent, passing: passthrough)
     }
@@ -190,7 +223,9 @@ final class EventTap: @unchecked Sendable {
         if recorder != nil {
             return record(tapEvent, at: now, passing: passthrough)
         }
-        if recognizer.handle(tapEvent, at: now) == .fired {
+        let match = recognizer.handle(tapEvent, at: now)
+        if match == .consumed { return nil }
+        if match == .fired {
             DebugLog.event("trigger fired session=\(session.isLive)")
             DispatchQueue.main.async { [weak self] in self?.onTrigger?() }
             // Swallow a chord so ⌥L fires the trigger instead of typing "¬".
@@ -216,8 +251,8 @@ final class EventTap: @unchecked Sendable {
         }
         let result = recorder.handle(tapEvent, at: now)
         if result != .none {
-            let report = onRecorded
-            DispatchQueue.main.async { report?(result) }
+            endRecording(reporting: result)
+            DispatchQueue.main.async { [weak self] in self?.matchModeToWork() }
         }
         return tapEvent.kind == .mouseDown ? passthrough : nil
     }
@@ -243,6 +278,7 @@ private extension TapEvent {
         let kind: Kind
         switch type {
         case .keyDown: kind = .keyDown
+        case .keyUp: kind = .keyUp
         case .flagsChanged: kind = .flagsChanged
         case .leftMouseDown, .rightMouseDown, .otherMouseDown: kind = .mouseDown
         default: return nil
@@ -251,7 +287,8 @@ private extension TapEvent {
             kind: kind,
             keyCode: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)),
             flags: event.flags.rawValue,
-            characters: kind == .keyDown ? event.typedCharacters : ""
+            characters: kind == .keyDown ? event.typedCharacters : "",
+            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         )
     }
 }
@@ -261,9 +298,11 @@ private extension CGEvent {
     /// already applied — no second guess at `UCKeyTranslate` needed.
     var typedCharacters: String {
         var length = 0
-        var buffer = [UniChar](repeating: 0, count: 8)
-        keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &buffer)
-        guard length > 0 else { return "" }
-        return String(utf16CodeUnits: buffer, count: min(length, buffer.count))
+        keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        guard length > 0, length <= 256 else { return "" }
+        var buffer = [UniChar](repeating: 0, count: length)
+        keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)
+        guard length <= buffer.count else { return "" }
+        return String(utf16CodeUnits: buffer, count: length)
     }
 }

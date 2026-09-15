@@ -4,9 +4,7 @@ import Foundation
 
 /// A 500-line ring in memory, mirrored to ~/Library/Logs/Keyflip.log.
 ///
-/// `event` is called from the event-tap callback, which runs on the main run
-/// loop: anything slow here gets the tap disabled by timeout. So the file write
-/// is an append on a background queue, never a rewrite of the whole ring.
+/// File writes run on a background queue so they cannot stall the event tap.
 enum DebugLog {
     static let fileURL: URL = {
         let logs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -35,23 +33,14 @@ enum DebugLog {
         store.snapshot()
     }
 
-    static func quote(_ text: String) -> String {
-        let ns = text as NSString
-        if ns.length > 80 {
-            return "\u{201C}\(ns.substring(to: 80))\u{2026}\u{201D} (\(ns.length) chars)"
-        }
-        return "\u{201C}\(text)\u{201D}"
+    static func describeText(_ text: String) -> String {
+        "<redacted; \(text.utf16.count) UTF-16 units>"
     }
 
     private final class Store: @unchecked Sendable {
         private let lock = NSLock()
         private var lines: [String] = []
         private let io = DispatchQueue(label: "local.Keyflip.debuglog", qos: .utility)
-
-        /// Appended and trimmed rather than truncated at launch: the artifacts
-        /// this log explains show up once in a hundred conversions, and the app
-        /// is reinstalled between most of them.
-        private static let maxBytes = 1 << 20
 
         /// Only Keyflip itself mirrors to disk. Every process on this machine
         /// shares the one log, and a test run's lines are shaped exactly like
@@ -64,29 +53,11 @@ enum DebugLog {
         /// Touched only from `io`, which is serial.
         private lazy var handle: FileHandle? = {
             guard Self.isTheApp else { return nil }
-            let path = DebugLog.fileURL.path
-            if FileManager.default.fileExists(atPath: path) {
-                Self.trim(path)
-            } else {
-                FileManager.default.createFile(atPath: path, contents: nil)
-            }
-            guard let handle = try? FileHandle(forWritingTo: DebugLog.fileURL) else { return nil }
-            _ = try? handle.seekToEnd()
+            FileManager.default.createFile(atPath: DebugLog.fileURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            guard let handle = try? FileHandle(forWritingTo: DebugLog.fileURL),
+                  (try? handle.truncate(atOffset: 0)) != nil else { return nil }
             return handle
         }()
-
-        /// Keep the tail, cut on a line boundary so the first surviving entry
-        /// is still a whole entry.
-        private static func trim(_ path: String) {
-            guard let data = FileManager.default.contents(atPath: path), data.count > maxBytes else {
-                return
-            }
-            var tail = data.suffix(maxBytes)
-            if let newline = tail.firstIndex(of: 0x0A) {
-                tail = tail[tail.index(after: newline)...]
-            }
-            try? Data(tail).write(to: URL(fileURLWithPath: path))
-        }
 
         var onChange: (@Sendable () -> Void)? {
             get { lock.withLock { _onChange } }

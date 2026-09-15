@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import LayoutConversion
 @testable import Keyflip
@@ -7,23 +8,31 @@ import LayoutConversion
 /// handle, so a write reaching one declines instead of guessing.
 final class ScriptedField: FieldReader {
     private var reads: [FieldRead]
+    var focusedHandle: FieldHandle?
 
     init(_ reads: [FieldRead] = []) {
         self.reads = reads
+        if case .field(let snapshot) = reads.first { focusedHandle = snapshot.handle }
     }
 
     init(showing readings: [FieldReading]) {
-        reads = readings.map { .field(FieldSnapshot(handle: .none, reading: $0)) }
+        reads = readings.map { .field(snapshot($0)) }
+        focusedHandle = readings.first.map { snapshot($0).handle }
     }
 
     /// A field that answers the same way however often it is asked, for the
     /// paths that re-read while polling.
     init(always reading: FieldReading) {
-        repeating = .field(FieldSnapshot(handle: .none, reading: reading))
+        repeating = .field(snapshot(reading))
+        focusedHandle = snapshot(reading).handle
         reads = []
     }
 
-    private var repeating: FieldRead?
+    var repeating: FieldRead?
+
+    func isFocused(_ snapshot: FieldSnapshot) -> Bool {
+        focusedHandle?.matches(snapshot.handle) == true
+    }
 
     func read() -> FieldRead {
         if let repeating { return repeating }
@@ -49,5 +58,8 @@ func reading(
 }
 
 func snapshot(_ reading: FieldReading) -> FieldSnapshot {
-    FieldSnapshot(handle: .none, reading: reading)
+    FieldSnapshot(
+        handle: .ax(AXUIElementCreateApplication(Int32(truncatingIfNeeded: reading.app.hashValue))),
+        reading: reading
+    )
 }

@@ -19,6 +19,8 @@ final class ScriptedWriter: FieldWriter {
     var replaceAnswers: [FieldAccess.WriteAttempt] = [.wrote]
     var verifyAnswers: [FieldAccess.WriteCheck] = [.applied]
     var selectAnswers: [Bool] = [true]
+    var onType: (() -> Void)?
+    var onSelect: (() -> Void)?
     var restoreCaretAnswers: [FieldAccess.CaretRestore] = [.collapsed]
     var typeKeysAnswers: [Bool] = [true]
 
@@ -49,16 +51,18 @@ final class ScriptedWriter: FieldWriter {
 
     func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool {
         calls.append(.select(range, text))
+        onSelect?()
         return next(&selectAnswers)
     }
 
-    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore {
+    func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> FieldAccess.CaretRestore {
         calls.append(.restoreCaret)
         return next(&restoreCaretAnswers)
     }
 
     func typeKeys(deleting count: Int, with text: String) -> Bool {
         calls.append(.typeKeys(deleting: count, with: text))
+        onType?()
         return next(&typeKeysAnswers)
     }
 }

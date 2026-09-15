@@ -4,10 +4,6 @@ import Foundation
 import LayoutConversion
 
 enum FieldAccess {
-    /// AX calls block on the target app's run loop. One second is already an
-    /// eternity to hold a keystroke, so cap every element we touch.
-    private static let timeout: Float = 1
-
     static func read() -> FieldRead {
         if IsSecureEventInputEnabled() {
             return .secure
@@ -16,16 +12,17 @@ enum FieldAccess {
         case .failed(let read):
             return read
         case .element(let focused):
-            let element = bestTextElement(focused)
-            AXUIElementSetMessagingTimeout(element, timeout)
+            let element = focused
+            _ = AXBudget.prepare(element)
             if isSecure(element) {
                 return .secure
             }
             if hasMarkedText(element) {
                 return .markedText
             }
-            let contents = textContents(element)
             let role = string(element, kAXRoleAttribute as CFString) ?? "?"
+            guard supportsTextInput(role: role) else { return .noFocus }
+            guard let contents = textContents(element), !AXBudget.expired else { return .unsupported }
             return .field(FieldSnapshot(
                 handle: .ax(element),
                 reading: FieldReading(
@@ -39,11 +36,7 @@ enum FieldAccess {
         }
     }
 
-    /// Three outcomes, not two: a refusal is the app saying no and is worth
-    /// remembering against it, while a decline is us not making a write that
-    /// reached past the target. Recording a decline in `axWriteRefused`, which
-    /// is persisted, would send every later conversion there down the blind
-    /// path.
+    /// A decline is our safety guard, not evidence that the field refuses writes.
     enum WriteAttempt: Equatable {
         case wrote
         case refused
@@ -57,7 +50,7 @@ enum FieldAccess {
     ) -> WriteAttempt {
         guard let element = snapshot.handle.element else { return .declined }
         let reading = snapshot.reading
-        AXUIElementSetMessagingTimeout(element, timeout)
+        _ = AXBudget.prepare(element)
         // Browser fields often have AXSelectedText and no AXValue. Nothing
         // that follows may clamp the write away against an empty value.
         let hasValue = (reading.value as NSString).length > 0
@@ -138,9 +131,7 @@ enum FieldAccess {
     /// Whether a write that *reported* success actually landed — Monaco
     /// answers `.success` and changes nothing.
     ///
-    /// Four-way, because "did not read back as expected" hides two opposites:
-    /// a field that will not read back at all is safe to assume applied, while
-    /// one reading back as neither text has taken something with the write.
+    /// An unreadable field cannot confirm success or justify another write.
     enum WriteCheck: Equatable {
         case applied
         case unchanged
@@ -155,7 +146,8 @@ enum FieldAccess {
         over original: String
     ) -> WriteCheck {
         guard let element = snapshot.handle.element else { return .unreadable }
-        let value = textContents(element).value as NSString
+        guard let contents = textContents(element) else { return .unreadable }
+        let value = contents.value as NSString
         guard value.length > 0 else { return .unreadable }
         let before = snapshot.reading.value as NSString
         let wrote = (newText as NSString).length
@@ -203,30 +195,34 @@ enum FieldAccess {
     enum CaretRestore: Equatable {
         case collapsed
         case selectionHeld
+        case wrongPosition
+        case textChanged
         case unreadable
     }
 
-    /// Put the caret back where the snapshot found it, and prove it collapsed.
-    /// A refused write can leave its selection behind, and one backspace
-    /// against that eats the whole run.
-    ///
-    /// Retried for the same reason `select` is: the rung above leaves a
-    /// selection on the field, and an app that bridges Accessibility through
-    /// another process — Slack, Zen — answers the read that follows a write
-    /// from before it. Trusting one immediate readback abandoned the rewrite
-    /// on state that was already correct, and the user's second attempt, a
-    /// second later, always worked.
-    static func restoreCaret(_ snapshot: FieldSnapshot) -> CaretRestore {
+    /// Put the caret back where the snapshot found it, and report whether it
+    /// reads back collapsed. A refused write can leave its selection behind,
+    /// and one backspace against that eats the whole run. One attempt only:
+    /// the rewriter spaces out the retries, since asking again at once gets
+    /// the same stale answer.
+    static func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> CaretRestore {
         guard let element = snapshot.handle.element else { return .unreadable }
         let caret = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
-        var last = CaretRestore.unreadable
-        for _ in 0..<3 {
-            guard setRange(element, caret) else { continue }
-            guard let now = selectedRange(element) else { continue }
-            if now.length == 0 { return .collapsed }
-            last = .selectionHeld
+        guard setRange(element, caret) else { return .unreadable }
+        guard let contents = textContents(element) else { return .unreadable }
+        let value = contents.value
+        guard let now = selectedRange(element) else { return .unreadable }
+        return confirmCaret(now, at: caret.location, in: value, expecting: text)
+    }
+
+    static func confirmCaret(_ range: NSRange, at location: Int, in value: String, expecting text: String) -> CaretRestore {
+        guard range.length == 0 else { return .selectionHeld }
+        guard range.location == location else { return .wrongPosition }
+        let length = text.utf16.count
+        guard !text.isEmpty, slice(value as NSString, at: location - length, length: length) == text else {
+            return .textChanged
         }
-        return last
+        return .collapsed
     }
 
     private static func slice(_ value: NSString, at location: Int, length: Int) -> String? {
@@ -251,7 +247,7 @@ enum FieldAccess {
 
     private static func focusedElement() -> FocusResult {
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, timeout)
+        _ = AXBudget.prepare(system)
 
         var focused: AnyObject?
         let err = AXUIElementCopyAttributeValue(
@@ -269,6 +265,7 @@ enum FieldAccess {
 
         // Some apps only answer through their own application element.
         var app: AnyObject?
+        guard AXBudget.prepare(system) else { return .failed(.unsupported) }
         let appErr = AXUIElementCopyAttributeValue(
             system,
             kAXFocusedApplicationAttribute as CFString,
@@ -281,7 +278,7 @@ enum FieldAccess {
             return .failed(.noFocus)
         }
         let appElement = app as! AXUIElement
-        AXUIElementSetMessagingTimeout(appElement, timeout)
+        guard AXBudget.prepare(appElement) else { return .failed(.unsupported) }
         var inner: AnyObject?
         let innerErr = AXUIElementCopyAttributeValue(
             appElement,
@@ -298,40 +295,35 @@ enum FieldAccess {
     /// AXNumberOfCharacters + AXStringForRange still work.
     private static func textContents(
         _ element: AXUIElement
-    ) -> (value: String, range: NSRange, selected: String) {
+    ) -> (value: String, range: NSRange, selected: String)? {
+        let count = intValue(element, kAXNumberOfCharactersAttribute as CFString)
+        if let count, !(0...AXBudget.textLimit).contains(count) { return nil }
         var value = string(element, kAXValueAttribute as CFString) ?? ""
         if (value as NSString).length == 0,
-           let chars = intValue(element, kAXNumberOfCharactersAttribute as CFString), chars > 0
+           let chars = count, chars > 0
         {
             value = stringForRange(element, NSRange(location: 0, length: chars)) ?? ""
         }
+        guard value.utf16.count <= AXBudget.textLimit else { return nil }
         let range = selectedRange(element)
             ?? NSRange(location: (value as NSString).length, length: 0)
-        return (value, range, selectedString(element, range: range, value: value))
+        guard range.location >= 0, range.length >= 0, range.length <= AXBudget.textLimit else { return nil }
+        let selected = selectedString(element, range: range, value: value)
+        guard selected.utf16.count <= AXBudget.textLimit else { return nil }
+        return (value, range, selected)
     }
 
-    /// The focused element is sometimes a wrapper whose text lives one or two
-    /// levels down (web areas, Electron). Fall back to the longest descendant.
-    private static func bestTextElement(_ root: AXUIElement) -> AXUIElement {
-        guard textContents(root).value.isEmpty else { return root }
-        var best = root
-        var bestLen = 0
+    // A wrapper's descendants may contain unrelated fields or static text.
+    static func supportsTextInput(role: String) -> Bool {
+        [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role)
+    }
 
-        func walk(_ element: AXUIElement, depth: Int) {
-            guard depth > 0,
-                  let children = copy(element, kAXChildrenAttribute as CFString) as? [AXUIElement]
-            else { return }
-            for child in children.prefix(24) {
-                let len = textContents(child).value.utf16.count
-                if len > bestLen {
-                    best = child
-                    bestLen = len
-                }
-                walk(child, depth: depth - 1)
-            }
-        }
-        walk(root, depth: 3)
-        return best
+    static func isFocused(_ snapshot: FieldSnapshot) -> Bool {
+        guard !IsSecureEventInputEnabled(),
+              case .element(let element) = focusedElement(),
+              snapshot.handle.matches(.ax(element)) else { return false }
+        _ = AXBudget.prepare(element)
+        return !isSecure(element) && !hasMarkedText(element) && !AXBudget.expired
     }
 
     private static func intValue(_ element: AXUIElement, _ attr: CFString) -> Int? {
@@ -351,6 +343,8 @@ enum FieldAccess {
     }
 
     private static func stringForRange(_ element: AXUIElement, _ range: NSRange) -> String? {
+        guard range.location >= 0, (0...AXBudget.textLimit).contains(range.length),
+              AXBudget.prepare(element) else { return nil }
         var cf = CFRange(location: range.location, length: range.length)
         guard let ax = AXValueCreate(.cfRange, &cf) else { return nil }
         var value: AnyObject?
@@ -392,6 +386,7 @@ enum FieldAccess {
 
     /// A range the field will accept: inside the text, never inverted.
     private static func copy(_ element: AXUIElement, _ attr: CFString) -> AnyObject? {
+        guard AXBudget.prepare(element) else { return nil }
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(element, attr, &value) == .success else { return nil }
         return value
@@ -402,6 +397,6 @@ enum FieldAccess {
     }
 
     private static func set(_ element: AXUIElement, _ attr: CFString, _ value: CFTypeRef) -> Bool {
-        AXUIElementSetAttributeValue(element, attr, value) == .success
+        AXBudget.prepare(element) && AXUIElementSetAttributeValue(element, attr, value) == .success
     }
 }

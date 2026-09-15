@@ -83,6 +83,7 @@ public enum Trigger: Equatable, Codable, Sendable {
 public struct TapEvent: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case keyDown
+        case keyUp
         case flagsChanged
         case mouseDown
     }
@@ -92,12 +93,14 @@ public struct TapEvent: Equatable, Sendable {
     public var flags: UInt64
     /// What the system resolved this keystroke to, when it resolved to text.
     public var characters: String
+    public var isRepeat: Bool
 
-    public init(kind: Kind, keyCode: UInt16, flags: UInt64, characters: String = "") {
+    public init(kind: Kind, keyCode: UInt16, flags: UInt64, characters: String = "", isRepeat: Bool = false) {
         self.kind = kind
         self.keyCode = keyCode
         self.flags = flags
         self.characters = characters
+        self.isRepeat = isRepeat
     }
 
     public var independentFlags: UInt64 {
@@ -108,12 +111,14 @@ public struct TapEvent: Equatable, Sendable {
 public enum TriggerMatch: Equatable, Sendable {
     case none
     case fired
+    case consumed
 }
 
 public final class TriggerRecognizer: @unchecked Sendable {
     public var trigger: Trigger
     public var interval: TimeInterval
     private var lastFlags: UInt64 = 0
+    private var heldChord: UInt16?
     private enum Pending {
         case down(ModifierKey, isSecond: Bool)
         case firstTap(ModifierKey, TimeInterval)
@@ -126,6 +131,8 @@ public final class TriggerRecognizer: @unchecked Sendable {
     }
 
     public func reset() {
+        lastFlags = 0
+        heldChord = nil
         pending = nil
     }
 
@@ -140,14 +147,20 @@ public final class TriggerRecognizer: @unchecked Sendable {
 
     private func handleChord(_ chord: Chord, _ event: TapEvent) -> TriggerMatch {
         pending = nil
-        guard event.kind == .keyDown else { return .none }
+        if event.keyCode == heldChord {
+            if event.kind == .keyUp { heldChord = nil; return .consumed }
+            if event.kind == .keyDown { return .consumed }
+        }
+        guard event.kind == .keyDown, !event.isRepeat, heldChord != event.keyCode else { return .none }
         guard event.keyCode == chord.keyCode else { return .none }
         let relevant = Trigger.relevantModifiers
         guard event.independentFlags & relevant == chord.modifiers & relevant else { return .none }
+        heldChord = event.keyCode
         return .fired
     }
 
     private func handleDoubleTap(_ want: ModifierKey, _ event: TapEvent, at time: TimeInterval) -> TriggerMatch {
+        if event.kind == .mouseDown { pending = nil; return .none }
         if event.kind == .keyDown {
             pending = nil
             lastFlags = event.independentFlags
@@ -222,6 +235,8 @@ public final class Recorder: @unchecked Sendable {
     }
 
     public func handle(_ event: TapEvent, at time: TimeInterval) -> Result {
+        if event.kind == .mouseDown { return .cancel }
+        if event.isRepeat { return .none }
         if event.kind == .keyDown, event.keyCode == 0x35 {
             return .cancel
         }

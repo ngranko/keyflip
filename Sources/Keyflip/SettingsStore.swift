@@ -38,13 +38,7 @@ final class SettingsStore: @unchecked Sendable {
         }
     }
 
-    /// Apps proven to discard Accessibility writes. Kept across launches: an
-    /// app does not change its mind, and re-learning costs a failed conversion
-    /// on the first trigger every time.
-    var axWriteRefused: Set<String> {
-        get { Set(defaults.stringArray(forKey: Key.axWriteRefused) ?? []) }
-        set { defaults.set(newValue.sorted(), forKey: Key.axWriteRefused) }
-    }
+    func clearLegacyRefusals() { defaults.removeObject(forKey: Key.axWriteRefused) }
 
     func pairIDs() -> (String, String)? {
         guard let a = slotA, let b = slotB, a != b else { return nil }

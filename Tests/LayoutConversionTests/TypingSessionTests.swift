@@ -3,41 +3,41 @@ import Testing
 
 @Test func characterKeysStartASession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
     #expect(session.isLive)
 }
 
 @Test func spaceKeepsALiveSession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x31, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x31, flags: 0, characters: " "))
     #expect(session.isLive)
 }
 
-@Test func backspaceKeepsALiveSession() {
+@Test func backspaceEndsAnExhaustedSession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
     session.handle(TapEvent(kind: .keyDown, keyCode: 0x33, flags: 0))
-    #expect(session.isLive)
+    #expect(!session.isLive)
 }
 
 @Test func clickEndsASession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
     session.handle(TapEvent(kind: .mouseDown, keyCode: 0, flags: 0))
     #expect(!session.isLive)
 }
 
 @Test func arrowsEndASession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
     session.handle(TapEvent(kind: .keyDown, keyCode: 0x7B, flags: 0))
     #expect(!session.isLive)
 }
 
 @Test func pasteEndsASession() {
     let session = TypingSession()
-    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0))
+    session.handle(TapEvent(kind: .keyDown, keyCode: 0x00, flags: 0, characters: "a"))
     session.handle(TapEvent(kind: .keyDown, keyCode: 0x09, flags: 1 << 20))
     #expect(!session.isLive)
 }
@@ -82,7 +82,7 @@ private func typing(_ characters: String, keyCode: UInt16 = 0x00) -> TapEvent {
     // F5 and friends resolve to private-use scalars, not text.
     session.handle(typing("\u{F708}", keyCode: 0x60))
     #expect(session.typed.isEmpty)
-    #expect(session.isLive)
+    #expect(!session.isLive)
 }
 
 @Test func mirrorKeepsTheTrailingSpaceSoTheWordCanBeFound() {

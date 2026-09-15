@@ -11,11 +11,17 @@ struct FieldHandle {
 
     static func ax(_ element: AXUIElement) -> FieldHandle { FieldHandle(element: element) }
     static var none: FieldHandle { FieldHandle(element: nil) }
+
+    func matches(_ other: FieldHandle) -> Bool {
+        guard let element, let other = other.element else { return false }
+        return CFEqual(element, other)
+    }
 }
 
 struct FieldSnapshot {
     var handle: FieldHandle
     var reading: FieldReading
+    var inputRevision: UInt64? = nil
 }
 
 /// What a trigger found under the caret. The cases carry the follow policy
@@ -26,6 +32,7 @@ enum FieldRead {
     case markedText
     case secure
     case unavailable
+    case unsupported
 
     /// Whether the AX API answered at all. Every other case is a verdict about
     /// the field; `unavailable` is a verdict about our own grant.
@@ -40,8 +47,15 @@ enum FieldRead {
 /// app.
 protocol FieldReader {
     func read() -> FieldRead
+    func isFocused(_ snapshot: FieldSnapshot) -> Bool
 }
 
 struct AXFieldReader: FieldReader {
-    func read() -> FieldRead { FieldAccess.read() }
+    func read() -> FieldRead {
+        AXBudget.run {
+            let result = FieldAccess.read()
+            return AXBudget.expired ? .unsupported : result
+        }
+    }
+    func isFocused(_ snapshot: FieldSnapshot) -> Bool { AXBudget.run { FieldAccess.isFocused(snapshot) } }
 }

@@ -1,173 +1,144 @@
 import CoreGraphics
 import Foundation
 
-/// The tap's mach port, and the thread that answers it.
-///
-/// A tap that can delete events and stops answering swallows everything in its
-/// mask: the machine loses the keyboard and every mouse click while the pointer
-/// still moves. Three rules keep that from lasting. The port is answered on a
-/// thread of its own, so a stall on the main thread — where every AX call may
-/// block for a second — can never hold a keystroke. It is created able to
-/// delete only while something actually needs deleting. And a timeout is taken
-/// at its word: the tap held someone's event, so it goes, and a fresh one has
-/// to earn its place back.
 final class TapPort: @unchecked Sendable {
+    private final class CallbackContext: @unchecked Sendable {
+        weak var owner: TapPort?
+        let generation = UUID()
+        init(owner: TapPort) { self.owner = owner }
+    }
+
+    private let observationGap: () -> Void
     private let mask: CGEventMask
     private let answer: (CGEventType, CGEvent) -> Unmanaged<CGEvent>?
-
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
     private var port: CFMachPort?
+    private var context: CallbackContext?
     private var options: CGEventTapOptions?
     private var thread: Thread?
     private var loop: CFRunLoop?
     private var health = TapHealth()
     private var retired = false
 
-    init(mask: CGEventMask, answer: @escaping (CGEventType, CGEvent) -> Unmanaged<CGEvent>?) {
+    init(mask: CGEventMask, observationGap: @escaping () -> Void = {}, answer: @escaping (CGEventType, CGEvent) -> Unmanaged<CGEvent>?) {
+        self.observationGap = observationGap
         self.mask = mask
         self.answer = answer
     }
 
-    var isActive: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return port != nil
-    }
+    var isActive: Bool { locked { port != nil } }
+    var isRetired: Bool { locked { retired } }
+    var mode: CGEventTapOptions? { locked { options } }
 
-    /// Given up on after repeated timeouts, and not to be rebuilt unattended.
-    var isRetired: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return retired
-    }
-
-    /// What the live tap may do to an event. Nil while there is no tap.
-    var mode: CGEventTapOptions? {
-        lock.lock()
-        defer { lock.unlock() }
-        return options
-    }
-
-    /// Idempotent, and refuses while retired: nothing automatic may put a tap
-    /// back that had to be taken away to give the user their keyboard.
     @discardableResult
     func start(_ options: CGEventTapOptions) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if port != nil { return true }
-        guard !retired else { return false }
+        locked {
+            if port != nil { return true }
+            guard !retired else { return false }
+            return create(options)
+        }
+    }
+
+    @discardableResult
+    func replace(with options: CGEventTapOptions) -> Bool {
+        locked {
+            guard port != nil else { return false }
+            if self.options == options { return true }
+            stop()
+            return start(options)
+        }
+    }
+
+    private func create(_ options: CGEventTapOptions) -> Bool {
+        let context = CallbackContext(owner: self)
         guard let created = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: options,
-            eventsOfInterest: mask,
-            callback: { _, type, event, info in
+            tap: .cgSessionEventTap, place: .headInsertEventTap, options: options,
+            eventsOfInterest: mask, callback: { _, type, event, info in
                 guard let info else { return Unmanaged.passUnretained(event) }
-                return Unmanaged<TapPort>.fromOpaque(info).takeUnretainedValue().answer(type, event)
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
+                let context = Unmanaged<CallbackContext>.fromOpaque(info).takeUnretainedValue()
+                guard let owner = context.owner else { return Unmanaged.passUnretained(event) }
+                return owner.receive(type, event, generation: context.generation)
+            }, userInfo: Unmanaged.passUnretained(context).toOpaque()
         ) else { return false }
         port = created
+        self.context = context
         self.options = options
-        serve(created)
+        serve(created, context: context)
         CGEvent.tapEnable(tap: created, enable: true)
         return true
     }
 
-    /// Leaves nothing behind that could still be handed an event: an
-    /// invalidated port is inert whatever state this process is in.
-    func stop() {
-        lock.lock()
-        let port = self.port
-        let loop = self.loop
-        self.port = nil
-        self.options = nil
-        self.loop = nil
-        thread?.cancel()
-        thread = nil
-        lock.unlock()
-
-        if let port {
-            CGEvent.tapEnable(tap: port, enable: false)
-            CFMachPortInvalidate(port)
+    private func receive(_ type: CGEventType, _ event: CGEvent, generation: UUID) -> Unmanaged<CGEvent>? {
+        // Teardown must never make an event wait. A retired callback may only pass through.
+        guard lock.try() else {
+            observationGap()
+            return Unmanaged.passUnretained(event)
         }
-        if let loop { CFRunLoopStop(loop) }
-    }
-
-    /// A person granting Accessibility again is reason enough to try a retired
-    /// tap once more, with a clean record.
-    func rearm() {
-        lock.lock()
         defer { lock.unlock() }
-        retired = false
-        health.forget()
+        guard context?.generation == generation else { return Unmanaged.passUnretained(event) }
+        return answer(type, event)
     }
 
-    /// What to do with a `tapDisabledBy…` event.
-    ///
-    /// A timeout means an event sat waiting on this process, so the tap goes —
-    /// putting it back in place is what turned a revoked grant into half a
-    /// minute of dead keyboard. Rebuilding is the supervisor's job, and a tap
-    /// the window server refuses to create is the one honest answer about this
-    /// process's grant there is: `AXIsProcessTrusted` went on saying yes
-    /// throughout (ADR 0009).
-    func recoverFromDisable(_ type: CGEventType) {
-        guard type == .tapDisabledByTimeout else {
-            lock.lock()
-            let port = self.port
-            lock.unlock()
-            if let port { CGEvent.tapEnable(tap: port, enable: true) }
-            return
+    func stop() {
+        locked {
+            if let port {
+                CGEvent.tapEnable(tap: port, enable: false)
+                CFMachPortInvalidate(port)
+            }
+            thread?.cancel()
+            if let loop { CFRunLoopStop(loop) }
+            port = nil
+            context = nil
+            options = nil
+            loop = nil
+            thread = nil
         }
-        giveUp("tap timed out")
     }
 
-    /// Take the tap away over evidence it stopped answering for its events.
-    /// What that cost decides the penalty: a tap that may delete was holding
-    /// someone's input, and a second strike inside the minute retires it. A
-    /// listening one held nothing, so it is replaced as often as it takes.
-    func giveUp(_ reason: String) {
-        lock.lock()
-        let healthy = health.survivesTimeout(
-            at: ProcessInfo.processInfo.systemUptime,
-            mayDeleteEvents: options == .defaultTap
-        )
-        retired = !healthy
-        lock.unlock()
+    func rearm() { locked { retired = false; health.forget() } }
 
-        DebugLog.event(
-            healthy
-                ? "\(reason) → tap torn down; a fresh one must prove the grant"
-                : "\(reason) → tap left off so input keeps flowing"
-        )
-        stop()
-    }
-
-    /// The port is answered here and nowhere else, so nothing the app does on
-    /// the main thread can delay an event on its way to the front app.
-    private func serve(_ port: CFMachPort) {
-        // Handed to exactly one thread, which is the only place it is ever
-        // touched.
-        nonisolated(unsafe) let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        let thread = Thread { [weak self] in
-            let loop: CFRunLoop = CFRunLoopGetCurrent()
-            self?.adopt(loop)
-            CFRunLoopAddSource(loop, source, .commonModes)
-            while !Thread.current.isCancelled {
-                CFRunLoopRunInMode(.defaultMode, 60, false)
+    func recoverFromDisable(_ type: CGEventType) {
+        locked {
+            if type == .tapDisabledByTimeout {
+                giveUp("tap timed out")
+            } else if let port {
+                CGEvent.tapEnable(tap: port, enable: true)
             }
         }
+    }
+
+    func giveUp(_ reason: String) {
+        locked {
+            guard port != nil else { return }
+            retired = !health.survivesTimeout(at: ProcessInfo.processInfo.systemUptime,
+                                              mayDeleteEvents: options == .defaultTap)
+            DebugLog.event("\(reason) → tap stopped; retired=\(retired)")
+            stop()
+        }
+    }
+
+    private func serve(_ port: CFMachPort, context: CallbackContext) {
+        nonisolated(unsafe) let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        let thread = Thread { [weak self, context] in
+            let loop = CFRunLoopGetCurrent()
+            self?.locked {
+                if self?.context?.generation == context.generation { self?.loop = loop }
+            }
+            CFRunLoopAddSource(loop, source, .commonModes)
+            while !Thread.current.isCancelled { CFRunLoopRunInMode(.defaultMode, 60, false) }
+            CFRunLoopRemoveSource(loop, source, .commonModes)
+            // The callback's unretained pointer stays valid until its run-loop source is gone.
+            withExtendedLifetime(context) {}
+        }
         thread.name = "local.Keyflip.eventtap"
-        thread.qualityOfService = QualityOfService.userInteractive
+        thread.qualityOfService = .userInteractive
         self.thread = thread
         thread.start()
     }
 
-    /// A thread that was already stopped must not put its dead run loop back.
-    private func adopt(_ loop: CFRunLoop) {
+    private func locked<T>(_ body: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        guard thread === Thread.current else { return }
-        self.loop = loop
+        return body()
     }
 }

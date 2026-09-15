@@ -21,7 +21,7 @@ protocol FieldWriter {
     ) -> FieldAccess.WriteCheck
 
     func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool
-    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore
+    func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> FieldAccess.CaretRestore
     func typeKeys(deleting count: Int, with text: String) -> Bool
 }
 
@@ -31,7 +31,7 @@ struct AXFieldWriter: FieldWriter {
         range: NSRange,
         with newText: String
     ) -> FieldAccess.WriteAttempt {
-        FieldAccess.replace(snapshot, range: range, with: newText)
+        AXBudget.run { FieldAccess.replace(snapshot, range: range, with: newText) }
     }
 
     func verify(
@@ -40,15 +40,15 @@ struct AXFieldWriter: FieldWriter {
         wrote newText: String,
         over original: String
     ) -> FieldAccess.WriteCheck {
-        FieldAccess.verify(snapshot, range: range, wrote: newText, over: original)
+        AXBudget.run { FieldAccess.verify(snapshot, range: range, wrote: newText, over: original) }
     }
 
     func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool {
-        FieldAccess.select(snapshot, range: range, expecting: text)
+        AXBudget.run { FieldAccess.select(snapshot, range: range, expecting: text) }
     }
 
-    func restoreCaret(_ snapshot: FieldSnapshot) -> FieldAccess.CaretRestore {
-        FieldAccess.restoreCaret(snapshot)
+    func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> FieldAccess.CaretRestore {
+        AXBudget.run { FieldAccess.restoreCaret(snapshot, expecting: text) }
     }
 
     func typeKeys(deleting count: Int, with text: String) -> Bool {

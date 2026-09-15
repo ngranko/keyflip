@@ -19,7 +19,7 @@ struct KeyLandingTests {
         #expect(
             KeyLanding.judge(
                 field: "катили", wasShowing: "dsrfnbkb", expected: typed, mirror: typed
-            ) == .landed
+            ) == .unverifiable
         )
     }
 
@@ -40,7 +40,7 @@ struct KeyLandingTests {
         #expect(
             KeyLanding.judge(
                 field: "", wasShowing: "", expected: typed, mirror: typed
-            ) == .landed
+            ) == .unverifiable
         )
     }
 

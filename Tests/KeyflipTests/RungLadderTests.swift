@@ -40,7 +40,7 @@ private func liveSession(typing text: String) -> TypingSession {
 @MainActor
 private struct Ladder {
     let writer: ScriptedWriter
-    let settings: SettingsStore
+    let refusals: WriteRefusals
     let rewriter: FieldRewriter
     let reading: FieldReading
 
@@ -54,16 +54,22 @@ private struct Ladder {
         let defaults = UserDefaults(suiteName: "KeyflipRungTests")!
         defaults.removePersistentDomain(forName: "KeyflipRungTests")
         let settings = SettingsStore(defaults: defaults)
-        settings.axWriteRefused = alreadyRefused
+        let refusals = WriteRefusals()
         self.writer = writer
-        self.settings = settings
+        self.refusals = refusals
         self.reading = field(selecting: selectedText)
+        if !alreadyRefused.isEmpty {
+            refusals.noteFailure(snapshot(reading))
+            refusals.noteFailure(snapshot(reading))
+        }
+        let reader = readsBack.map { ScriptedField(showing: [$0]) } ?? ScriptedField(always: reading)
+        if readsBack == nil { writer.onType = { reader.repeating = .field(snapshot(field(showing: output))) } }
         self.rewriter = FieldRewriter(
             settings: settings,
             session: liveSession(typing: mirror),
-            reader: readsBack.map { ScriptedField(showing: [$0]) } ?? ScriptedField(always: reading),
+            reader: reader,
             writer: writer,
-            wait: ImmediateWait()
+            wait: ImmediateWait(), refusals: refusals
         )
     }
 
@@ -74,8 +80,8 @@ private struct Ladder {
         rewriter.rewrite(
             target,
             to: output,
-            in: FieldSnapshot(handle: .none, reading: reading)
-        ) { landed = $0 }
+            in: snapshot(reading)
+        ) { landed = $0.shouldFollow }
         return landed ?? false
     }
 }
@@ -87,7 +93,7 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
     #expect(writer.calls == [.replace(target.range, output), .verify])
-    #expect(ladder.settings.axWriteRefused.isEmpty)
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
 /// ADR 0006: a selection the user made is typed over, never written through —
@@ -112,7 +118,7 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
     #expect(writer.verifyCount == 3)
-    #expect(ladder.settings.axWriteRefused.isEmpty)
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
 /// Monaco discards the write and says nothing. Once the rechecks run out the
@@ -124,7 +130,7 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
     #expect(writer.verifyCount == 6)
-    #expect(ladder.settings.axWriteRefused == [app])
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
     #expect(writer.calls.contains(.select(target.range, target.text)))
 }
 
@@ -136,20 +142,20 @@ private struct Ladder {
     writer.verifyAnswers = [.mangled("щтдн")]
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
-    #expect(ladder.settings.axWriteRefused == [app])
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
     #expect(writer.calls.contains(.typeKeys(deleting: 0, with: output)))
 }
 
 /// A field that will not read back at all tells us nothing, and retyping over
 /// a write that did land would double the run.
 @MainActor
-@Test func anUnreadableFieldIsAssumedWrittenRatherThanRetyped() {
+@Test func anUnreadableWriteDoesNotFollowOrRetry() {
     let writer = ScriptedWriter()
     writer.verifyAnswers = [.unreadable]
     let ladder = Ladder(writer: writer)
-    #expect(ladder.run())
+    #expect(!ladder.run())
     #expect(writer.calls == [.replace(target.range, output), .verify])
-    #expect(ladder.settings.axWriteRefused.isEmpty)
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
 /// The app was never asked, so there is no refusal to remember. Recording one
@@ -160,13 +166,12 @@ private struct Ladder {
     writer.replaceAnswers = [.declined]
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
-    #expect(ladder.settings.axWriteRefused.isEmpty)
+    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
-/// ADR 0007: the cost of learning an app refuses is paid once, ever. The next
-/// launch skips the write that poisons the element.
+/// Repeated refusals temporarily bypass AX writes for this exact field.
 @MainActor
-@Test func aKnownRefusingAppIsNeverWrittenToAgain() {
+@Test func aRecentlyRefusingFieldSkipsTheWrite() {
     let writer = ScriptedWriter()
     let ladder = Ladder(writer: writer, alreadyRefused: [app])
     #expect(ladder.run())
@@ -195,6 +200,20 @@ private struct Ladder {
     let ladder = Ladder(writer: writer, mirror: target.text, alreadyRefused: [app])
     #expect(!ladder.run())
     #expect(!writer.calls.contains(.typeKeys(deleting: 4, with: output)))
+}
+
+/// Zen, 2026-09-11: the caret readback lagged behind the write before it and
+/// reported `select`'s selection as held. The first trigger gave up on a caret
+/// that had already collapsed; asked again after a pause, it reads collapsed.
+@MainActor
+@Test func theBlindRungWaitsOutACaretReadbackThatLags() {
+    let writer = ScriptedWriter()
+    writer.selectAnswers = [false]
+    writer.restoreCaretAnswers = [.selectionHeld, .selectionHeld, .collapsed]
+    let ladder = Ladder(writer: writer, mirror: target.text, alreadyRefused: [app])
+    #expect(ladder.run())
+    #expect(writer.calls.filter { $0 == .restoreCaret }.count == 3)
+    #expect(writer.calls.contains(.typeKeys(deleting: 4, with: output)))
 }
 
 /// A caret that cannot be read is not a caret known to be collapsed, so the
@@ -233,7 +252,7 @@ private struct Ladder {
         alreadyRefused: [app],
         readsBack: field(showing: "")
     )
-    #expect(ladder.run())
+    #expect(!ladder.run())
     #expect(writer.calls.contains(.typeKeys(deleting: 4, with: output)))
     #expect(writer.calls.filter { $0 == .typeKeys(deleting: 0, with: output) }.count == 1)
 }
@@ -250,7 +269,7 @@ private struct Ladder {
         alreadyRefused: [app],
         readsBack: field(showing: "что-то ещё")
     )
-    #expect(ladder.run())
+    #expect(!ladder.run())
     #expect(!writer.calls.contains(.typeKeys(deleting: 0, with: output)))
 }
 

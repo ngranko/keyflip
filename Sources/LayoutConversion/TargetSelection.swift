@@ -52,7 +52,7 @@ public enum TargetSelection {
         if let selected = takeSelection(in: reading) {
             return .field(selected)
         }
-        guard session.isLive else { return askTheMirror(session, note: note) }
+        guard session.isLive, !session.typed.isEmpty else { return askTheMirror(session, note: note) }
         return weighWitnesses(reading, session: session, note: note)
     }
 
@@ -92,7 +92,7 @@ public enum TargetSelection {
         guard let word = LastWord.range(
             in: reading.value,
             caretUTF16: caret,
-            sessionUTF16: extent(of: mirror)
+            sessionUTF16: mirror.utf16.count
         ) else { return askTheMirror(session, note: note) }
         return .field(Target(
             text: (reading.value as NSString).substring(with: word),
@@ -128,14 +128,5 @@ public enum TargetSelection {
             return .none
         }
         return .mirror(text: run.text, trailing: run.trailing)
-    }
-
-    /// How much of the text in front of the caret this session typed, for
-    /// `LastWord.range` to clip to (ADR 0008). Nil once the mirror has been
-    /// emptied by a key we could not account for: clipping to zero would
-    /// refuse everything.
-    private static func extent(of mirror: String) -> Int? {
-        let length = (mirror as NSString).length
-        return length > 0 ? length : nil
     }
 }
