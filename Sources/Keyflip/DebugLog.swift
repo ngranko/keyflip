@@ -51,12 +51,9 @@ enum DebugLog {
         private static let isTheApp = ProcessInfo.processInfo.processName == "Keyflip"
 
         /// Touched only from `io`, which is serial.
-        private lazy var handle: FileHandle? = {
+        private lazy var file: RotatingLogFile? = {
             guard Self.isTheApp else { return nil }
-            FileManager.default.createFile(atPath: DebugLog.fileURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
-            guard let handle = try? FileHandle(forWritingTo: DebugLog.fileURL),
-                  (try? handle.truncate(atOffset: 0)) != nil else { return nil }
-            return handle
+            return try? RotatingLogFile(url: DebugLog.fileURL)
         }()
 
         var onChange: (@Sendable () -> Void)? {
@@ -74,7 +71,7 @@ enum DebugLog {
                 return _onChange
             }
             io.async { [self] in
-                try? handle?.write(contentsOf: Data((line + "\n").utf8))
+                try? file?.append(line)
             }
             notify?()
         }
