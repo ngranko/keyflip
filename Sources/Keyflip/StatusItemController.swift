@@ -8,8 +8,6 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private let pair: Pair
     private let tap: EventTap
     private var recordPanel: NSPanel?
-    private var pairView: PairColumnsView?
-    private var pillsView: PillsView?
     private var menuIsOpen = false
 
     /// The item's menu bar identity, which has to stay the same forever.
@@ -66,7 +64,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
-        tap.session.end()
+        tap.session.end(reason: .menuOpened)
         cancelRecording()
         pair.reloadFromSystem()
     }
@@ -79,9 +77,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         menu.removeAllItems()
         menu.autoenablesItems = false
         addAccessibilityGrant(to: menu)
+        addTapRecovery(to: menu)
         addPair(to: menu)
         menu.addItem(.separator())
-        addPills(to: menu)
+        addSettings(to: menu)
         menu.addItem(.separator())
         addFooter(to: menu)
     }
@@ -102,49 +101,68 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         menu.addItem(.separator())
     }
 
+    private func addTapRecovery(to menu: NSMenu) {
+        guard !tap.isActive, Permissions.accessibilityTrusted else { return }
+        let item = NSMenuItem(title: "Keyflip is inactive — Retry", action: #selector(retryTap), keyEquivalent: "")
+        item.target = self
+        item.isEnabled = true
+        menu.addItem(item)
+        menu.addItem(.separator())
+    }
+
+    @objc private func retryTap() {
+        tap.rearm()
+        if !tap.start() {
+            DebugLog.event("manual tap retry refused")
+        }
+    }
+
     private func addPair(to menu: NSMenu) {
         menu.addItem(Self.header("Pair"))
-        let pairView = PairColumnsView(
-            layouts: pair.enabledLayouts,
-            slotA: pair.slotA,
-            slotB: pair.slotB,
-            onPickA: { [weak self] id in
-                self?.pair.chooseSlotA(id)
-                self?.showChosenSlots()
-            },
-            onPickB: { [weak self] id in
-                self?.pair.chooseSlotB(id)
-                self?.showChosenSlots()
+        let support = NSMenuItem(title: "Base and Shift characters only", action: nil, keyEquivalent: "")
+        support.isEnabled = false
+        support.toolTip = "Option characters, dead-key compositions, and IMEs are not supported."
+        menu.addItem(support)
+        for (slot, selected, blocked) in [(0, pair.slotA, pair.slotB), (1, pair.slotB, pair.slotA)] {
+            let name = pair.enabledLayouts.first { $0.id == selected }?.name ?? "Choose layout…"
+            let item = NSMenuItem(title: "Layout \(slot == 0 ? "A" : "B"): \(name)", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for layout in pair.enabledLayouts {
+                let choice = NSMenuItem(title: layout.name, action: #selector(chooseLayout(_:)), keyEquivalent: "")
+                choice.target = self
+                choice.tag = slot
+                choice.representedObject = layout.id
+                choice.state = layout.id == selected ? .on : .off
+                choice.isEnabled = layout.id != blocked && pair.supportsLayout(layout.id)
+                submenu.addItem(choice)
             }
-        )
-        self.pairView = pairView
-        menu.addItem(Self.item(hosting: pairView))
+            item.submenu = submenu
+            menu.addItem(item)
+        }
     }
 
-    /// The pair decides what a pick means — a slot can refuse one — so the
-    /// columns are told what the pair holds, not what was clicked.
-    private func showChosenSlots() {
-        pairView?.apply(slotA: pair.slotA, slotB: pair.slotB)
+    @objc private func chooseLayout(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        if sender.tag == 0 { pair.chooseSlotA(id) } else { pair.chooseSlotB(id) }
     }
 
-    private func addPills(to menu: NSMenu) {
-        let pills = PillsView(
-            triggerGlyph: settings.trigger.glyph,
-            launchOn: LaunchAtLogin.isEnabled,
-            onSetTrigger: { [weak self] in
-                self?.statusItem.menu?.cancelTracking()
-                DispatchQueue.main.async {
-                    self?.beginRecording()
-                }
-            },
-            onToggleLogin: { [weak self] in
-                LaunchAtLogin.toggle()
-                self?.pillsView?.setLaunchOn(LaunchAtLogin.isEnabled)
-            }
-        )
-        self.pillsView = pills
-        menu.addItem(Self.item(hosting: pills))
+    private func addSettings(to menu: NSMenu) {
+        let trigger = NSMenuItem(title: "Set trigger… (\(settings.trigger.glyph))", action: #selector(setTrigger), keyEquivalent: "")
+        trigger.target = self
+        menu.addItem(trigger)
+        let login = NSMenuItem(title: "Launch at login", action: #selector(toggleLogin), keyEquivalent: "")
+        login.target = self
+        login.state = LaunchAtLogin.isEnabled ? .on : .off
+        menu.addItem(login)
     }
+
+    @objc private func setTrigger() {
+        statusItem.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in self?.beginRecording() }
+    }
+
+    @objc private func toggleLogin() { LaunchAtLogin.toggle() }
 
     private func addFooter(to menu: NSMenu) {
         let log = NSMenuItem(
@@ -163,14 +181,6 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         )
         quit.target = NSApp
         menu.addItem(quit)
-    }
-
-    /// A frame for a view: it must not highlight or answer a click of its own.
-    private static func item(hosting view: NSView) -> NSMenuItem {
-        let item = NSMenuItem()
-        item.isEnabled = false
-        item.view = view
-        return item
     }
 
     private static func header(_ title: String) -> NSMenuItem {
@@ -196,10 +206,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         cancelRecording()
         // The recorder reads the same tap the trigger does; without it the
         // panel would sit there swallowing nothing.
-        guard tap.isActive else {
-            Permissions.requestFromUser()
-            return
+        if !tap.isActive {
+            if Permissions.accessibilityTrusted { retryTap() } else { Permissions.requestFromUser() }
+            guard tap.isActive else { return }
         }
+        showRecordPanel()
         tap.startRecording(interval: NSEvent.doubleClickInterval) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -210,11 +221,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             case .captured(let trigger):
                 self.settings.trigger = trigger
                 self.tap.setTrigger(trigger)
-                self.pillsView?.setTriggerGlyph(trigger.glyph)
                 self.cancelRecording()
             }
         }
-        showRecordPanel()
     }
 
     private func cancelRecording() {
@@ -234,6 +243,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         recordPanel = panel
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as AnyObject? === recordPanel else { return }
+        cancelRecording()
     }
 
     func windowWillClose(_ notification: Notification) {

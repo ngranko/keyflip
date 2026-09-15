@@ -42,6 +42,8 @@ final class Pair {
         return (slotA: a, slotB: b)
     }
 
+    func supportsLayout(_ id: String) -> Bool { maps[id] != nil }
+
     func chooseSlotA(_ id: String) {
         settings.setSlotA(id)
         reloadFromSystem()

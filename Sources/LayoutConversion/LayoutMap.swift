@@ -56,7 +56,7 @@ public enum LayoutMapBuilder {
         // the user actually types it on rather than from the keypad.
         for key in mainKeys + padKeys {
             for mods in layers {
-                guard let s = translate(layout, key: key, mods: mods), !s.isEmpty else { continue }
+                guard let s = translate(layout, key: key, mods: mods), s.count == 1 else { continue }
                 let stroke = KeyStroke(key: key, mods: mods)
                 if reverse[s] == nil {
                     reverse[s] = stroke
