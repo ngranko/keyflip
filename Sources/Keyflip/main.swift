@@ -9,9 +9,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var convert: ConvertController!
     private var status: StatusItemController!
     private var supervisor: TapSupervisor!
+    private var setup: SetupController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settings = SettingsStore()
+        Permissions.mayPromptAutomatically = settings.setupCompleted
         tap = EventTap(trigger: settings.trigger, interval: NSEvent.doubleClickInterval)
         let reader = AXFieldReader()
         pair = Pair(settings: settings, catalog: SystemLayouts())
@@ -35,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         supervisor.start()
         convert.start()
         status = StatusItemController(settings: settings, pair: pair, tap: tap)
+        setup = SetupController(settings: settings, pair: pair, tap: tap) { [weak self] in
+            self?.status.beginRecording()
+        }
+        status.onShowSetup = { [weak self] in self?.setup.show() }
+        if !settings.setupCompleted { setup.show() }
     }
 }
 

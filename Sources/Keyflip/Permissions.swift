@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 enum Permissions {
     private static var promptedForThisLapse = false
+    static var mayPromptAutomatically = true
 
     /// Whether *this running binary* is on the Accessibility TCC list. Do not
     /// probe AX instead: reading our own menu succeeds without trust, which hid
@@ -33,7 +34,7 @@ enum Permissions {
             promptedForThisLapse = false
             return
         }
-        guard !promptedForThisLapse else { return }
+        guard mayPromptAutomatically, !promptedForThisLapse else { return }
         promptedForThisLapse = true
         prompt()
     }

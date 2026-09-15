@@ -14,6 +14,11 @@ final class SettingsStore: @unchecked Sendable {
         self.defaults = defaults
     }
 
+    var setupCompleted: Bool {
+        get { defaults.bool(forKey: "setupCompleted") }
+        set { defaults.set(newValue, forKey: "setupCompleted") }
+    }
+
     var slotA: String? {
         get { defaults.string(forKey: Key.slotA) }
         set { defaults.set(newValue, forKey: Key.slotA) }

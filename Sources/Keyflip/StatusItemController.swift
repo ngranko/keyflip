@@ -9,6 +9,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private let tap: EventTap
     private var recordPanel: NSPanel?
     private var menuIsOpen = false
+    var onShowSetup: (() -> Void)?
 
     /// The item's menu bar identity, which has to stay the same forever.
     ///
@@ -120,6 +121,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private func addPair(to menu: NSMenu) {
         menu.addItem(Self.header("Pair"))
+        if pair.conversionMaps == nil {
+            let fix = NSMenuItem(title: "Choose two supported layouts…", action: #selector(showSetup), keyEquivalent: "")
+            fix.target = self
+            menu.addItem(fix)
+        }
         let support = NSMenuItem(title: "Base and Shift characters only", action: nil, keyEquivalent: "")
         support.isEnabled = false
         support.toolTip = "Option characters, dead-key compositions, and IMEs are not supported."
@@ -174,6 +180,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         }
     }
 
+    @objc private func showSetup() {
+        statusItem.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in self?.onShowSetup?() }
+    }
+
     @objc private func copyDiagnostics() {
         let report = DiagnosticReport.capture(settings: settings, pair: pair, tap: tap)
         NSPasteboard.general.clearContents()
@@ -183,7 +194,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     private func addFooter(to menu: NSMenu) {
-        for (title, action) in [("Copy diagnostic report", #selector(copyDiagnostics))] {
+        for (title, action) in [("Set up Keyflip…", #selector(showSetup)), ("Copy diagnostic report", #selector(copyDiagnostics))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             menu.addItem(item)
@@ -225,7 +236,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         DebugLogWindow.show()
     }
 
-    private func beginRecording() {
+    func beginRecording() {
         cancelRecording()
         // The recorder reads the same tap the trigger does; without it the
         // panel would sit there swallowing nothing.

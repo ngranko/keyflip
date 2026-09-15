@@ -109,7 +109,7 @@ final class TapSupervisor: @unchecked Sendable {
     }
 
     private func arm() {
-        guard !tap.isActive else { return }
+        guard AXIsProcessTrusted(), !tap.isActive else { return }
         if tap.start() {
             loggedRefusal = false
             DebugLog.event("tap active (\(tap.modeDescription))")
