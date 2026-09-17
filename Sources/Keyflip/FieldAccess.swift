@@ -21,7 +21,10 @@ enum FieldAccess {
                 return .markedText
             }
             let role = string(element, kAXRoleAttribute as CFString) ?? "?"
-            guard supportsTextInput(role: role) else { return .noFocus }
+            guard supportsTextInput(role: role) else {
+                DebugLog.event("field rejected: app=\(focusedAppName()) role=\(role) reason=unsupportedRole")
+                return .noFocus
+            }
             guard let contents = textContents(element), !AXBudget.expired else { return .unsupported }
             return .field(FieldSnapshot(
                 handle: .ax(element),
