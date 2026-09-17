@@ -36,7 +36,8 @@ enum LaunchAtLogin {
     private static func requiresApproval(_ error: NSError) -> Bool {
         guard error.code == Int(kSMErrorLaunchDeniedByUser) else { return false }
         if #available(macOS 15, *), error.domain == SMAppServiceErrorDomain { return true }
-        return error.domain == kSMErrorDomainFramework as String
+        // Preserve older macOS errors without referencing the deprecated SDK constant.
+        return error.domain == "kSMErrorDomainFramework"
     }
 
     static func openSettings() { SMAppService.openSystemSettingsLoginItems() }

@@ -35,7 +35,13 @@ import Testing
     let result = LaunchAtLogin.change(status: .requiresApproval, register: { called = true }, unregister: { called = true })
     #expect(result == .requiresApproval)
     #expect(!called)
-    let denied = NSError(domain: kSMErrorDomainFramework as String, code: Int(kSMErrorLaunchDeniedByUser))
+    let denied = NSError(domain: "kSMErrorDomainFramework", code: Int(kSMErrorLaunchDeniedByUser))
+    #expect(LaunchAtLogin.change(status: .notRegistered, register: { throw denied }, unregister: {}) == .requiresApproval)
+}
+
+@Test func loginApprovalRecognizesTheModernErrorDomain() {
+    guard #available(macOS 15, *) else { return }
+    let denied = NSError(domain: SMAppServiceErrorDomain, code: Int(kSMErrorLaunchDeniedByUser))
     #expect(LaunchAtLogin.change(status: .notRegistered, register: { throw denied }, unregister: {}) == .requiresApproval)
 }
 
