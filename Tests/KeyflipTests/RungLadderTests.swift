@@ -92,7 +92,7 @@ private struct Ladder {
     writer.verifyAnswers = [.applied]
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
-    #expect(writer.calls == [.replace(target.range, output), .verify])
+    #expect(writer.calls == [.replace(target.range, output), .verify, .restoreCaret])
     #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
@@ -106,6 +106,7 @@ private struct Ladder {
     #expect(writer.calls == [
         .select(target.range, target.text),
         .typeKeys(deleting: 0, with: output),
+        .restoreCaret,
     ])
 }
 
@@ -212,7 +213,7 @@ private struct Ladder {
     writer.restoreCaretAnswers = [.selectionHeld, .selectionHeld, .collapsed]
     let ladder = Ladder(writer: writer, mirror: target.text, alreadyRefused: [app])
     #expect(ladder.run())
-    #expect(writer.calls.filter { $0 == .restoreCaret }.count == 3)
+    #expect(writer.calls.filter { $0 == .restoreCaret }.count == 4)
     #expect(writer.calls.contains(.typeKeys(deleting: 4, with: output)))
 }
 

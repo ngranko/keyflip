@@ -155,7 +155,7 @@ final class FieldRewriter {
             )
             refusals.noteSuccess(snapshot)
             syncMirror(after: target.text, became: output)
-            done(.applied)
+            settleCaret(in: snapshot, after: target.range, text: output, then: done)
         case .unreadable:
             session.discardMirror()
             DebugLog.event("replace unverifiable; no retry or follow")

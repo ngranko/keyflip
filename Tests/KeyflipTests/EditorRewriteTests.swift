@@ -120,3 +120,62 @@ private final class EditorScenario {
     #expect(outcome == .unknown)
     #expect(writer.calls.filter { $0 == .typeKeys(deleting: 0, with: "привет") }.count == 1)
 }
+
+@MainActor
+@Test(arguments: [true, false])
+func delayedRewritesMoveCaretToEndBeforeContinuedTyping(usesAX: Bool) {
+    let scenario = EditorScenario("🙂 ghbdtn suffix")
+    scenario.editor.acceptsAX = usesAX
+    scenario.editor.leavesCaretAtStart = true
+    scenario.rewrite("ghbdtn", to: "привет🙂")
+    scenario.deliver()
+    #expect(scenario.results == [.applied])
+    #expect(scenario.editor.current.reading.selectedRange == NSRange(location: 11, length: 0))
+    _ = scenario.editor.typeKeys(deleting: 0, with: "!")
+    scenario.editor.deliver()
+    #expect(scenario.editor.current.reading.value == "🙂 привет🙂! suffix")
+}
+
+@MainActor
+@Test func delayedCaretRestorationRetriesWithoutRewritingText() {
+    let scenario = EditorScenario("ghbdtn  ")
+    scenario.editor.leavesCaretAtStart = true
+    scenario.editor.refusedCaretMoves = 2
+    scenario.rewrite("ghbdtn", to: "привет")
+    scenario.deliver()
+    #expect(scenario.results.isEmpty)
+    #expect(scenario.rewriter.isSettling)
+    scenario.wait.advance()
+    scenario.wait.advance()
+    #expect(scenario.results == [.applied])
+    #expect(scenario.editor.current.reading.selectedRange == NSRange(location: 8, length: 0))
+    #expect(scenario.editor.current.reading.value == "привет  ")
+    #expect(scenario.editor.keyWrites == 0)
+}
+
+@MainActor
+@Test func userTypingCancelsPendingCaretRestoration() {
+    let scenario = EditorScenario("ghbdtn")
+    scenario.editor.leavesCaretAtStart = true
+    scenario.editor.refusedCaretMoves = 1
+    scenario.rewrite("ghbdtn", to: "привет")
+    scenario.deliver()
+    scenario.session.handle(TapEvent(kind: .keyDown, keyCode: 0, flags: 0, characters: "x"))
+    scenario.wait.advance()
+    #expect(scenario.results == [.failed])
+    #expect(scenario.editor.caretMoves == 1)
+}
+
+@MainActor
+@Test func refusedCaretRestorationDoesNotRetypeConfirmedText() {
+    let scenario = EditorScenario("ghbdtn")
+    scenario.editor.leavesCaretAtStart = true
+    scenario.editor.refusedCaretMoves = 20
+    scenario.rewrite("ghbdtn", to: "привет")
+    scenario.deliver()
+    for _ in 0..<FieldRewriter.confirmAttempts { scenario.wait.advance() }
+    #expect(scenario.results == [.unknown])
+    #expect(scenario.editor.current.reading.value == "привет")
+    #expect(scenario.editor.keyWrites == 0)
+    #expect(scenario.session.typed.isEmpty)
+}

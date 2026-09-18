@@ -27,6 +27,17 @@ extension FieldRewriter {
         allowUnverified: Bool = false,
         then done: @escaping (RewriteOutcome) -> Void
     ) {
+        let complete = done
+        let done: (RewriteOutcome) -> Void = { [weak self] outcome in
+            guard let self, outcome == .applied, let range,
+                  case .field(let snapshot) = reader.read(), transaction?.owns(snapshot) == true else {
+                complete(outcome)
+                return
+            }
+            let caret = NSRange(location: range.location + text.utf16.count, length: 0)
+            guard snapshot.reading.selectedRange != caret else { complete(.applied); return }
+            settleCaret(in: snapshot, after: range, text: text, then: complete)
+        }
         holdTrigger(for: Self.keySettle) { [weak self] in
             guard let self else {
                 done(.unknown)

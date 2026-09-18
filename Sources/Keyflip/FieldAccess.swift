@@ -211,6 +211,10 @@ enum FieldAccess {
     static func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> CaretRestore {
         guard let element = snapshot.handle.element else { return .unreadable }
         let caret = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
+        guard let before = textContents(element),
+              slice(before.value as NSString, at: caret.location - text.utf16.count,
+                    length: text.utf16.count) == text else { return .textChanged }
+        if selectedRange(element) == caret { return .collapsed }
         guard setRange(element, caret) else { return .unreadable }
         guard let contents = textContents(element) else { return .unreadable }
         let value = contents.value

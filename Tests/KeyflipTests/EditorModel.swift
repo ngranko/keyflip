@@ -5,6 +5,9 @@ import LayoutConversion
 final class EditorModel: FieldReader, FieldWriter {
     var current: FieldSnapshot
     var acceptsAX = true
+    var leavesCaretAtStart = false
+    var refusedCaretMoves = 0
+    private(set) var caretMoves = 0
     var dropNextInsertion = false
     var insertWithoutReplacing = false
     private var deliveries: [() -> Void] = []
@@ -37,7 +40,10 @@ final class EditorModel: FieldReader, FieldWriter {
     }
 
     func restoreCaret(_ snapshot: FieldSnapshot, expecting text: String) -> FieldAccess.CaretRestore {
+        caretMoves += 1
+        if refusedCaretMoves > 0 { refusedCaretMoves -= 1; return .wrongPosition }
         current.reading.selectedRange = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
+        current.reading.selectedText = ""
         return FieldAccess.confirmCaret(current.reading.selectedRange, at: snapshot.reading.selectedRange.upperBound,
                                         in: current.reading.value, expecting: text)
     }
@@ -56,7 +62,7 @@ final class EditorModel: FieldReader, FieldWriter {
     private func apply(_ text: String, to range: NSRange) {
         let range = insertWithoutReplacing ? NSRange(location: range.location, length: 0) : range
         current.reading.value = (current.reading.value as NSString).replacingCharacters(in: range, with: text)
-        current.reading.selectedRange = NSRange(location: range.location + text.utf16.count, length: 0)
+        current.reading.selectedRange = NSRange(location: range.location + (leavesCaretAtStart ? 0 : text.utf16.count), length: 0)
         current.reading.selectedText = ""
     }
 }
