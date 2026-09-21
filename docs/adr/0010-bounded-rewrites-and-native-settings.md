@@ -12,7 +12,7 @@ Accessibility operations share a 300 ms messaging budget, with at most 100 ms pe
 
 Tap creation, replacement, and retirement are serialized. Each callback belongs to one generation and retains its context until its run-loop source is removed. A callback that cannot enter immediately passes input through and clears the typing session. Chords fire once per key press. Modifier-clicks cancel double-taps, and recording ends on a click or panel deactivation. An inactive tap can be retried from the menu.
 
-Settings use standard menu items and layout submenus for keyboard navigation and Accessibility support. Conversion supports base and Shift characters only; the picker and README state the limits on Option characters, dead keys, and IMEs.
+Settings now use the restored two-column controls described in [ADR 0011](0011-accessible-pair-controls.md). Conversion supports base and Shift characters only; the picker and README state the limits on Option characters, dead keys, and IMEs.
 
 The disk log rotates at 1 MiB during a launch and starts empty on the next launch. It never includes field contents. Release jobs reuse a tag only when it points at the current commit and can resume an interrupted upload. Workflow actions are pinned to commits; only the publishing job has repository write permission. Pull requests run tests and a release build without signing credentials.
 

@@ -1,6 +1,6 @@
 # Status item is a swap mark; menu is a two-column pair plus pills
 
-Current behavior is specified in [ADR 0010](0010-bounded-rewrites-and-native-settings.md). This document records the earlier decision.
+The two-column design is restored with accessibility improvements in [ADR 0011](0011-accessible-pair-controls.md).
 
 The extra does not put the pair or the trigger in the menu bar. That bar already has the system input-source extra, and letters next to it would compete. The status item is a swap template image (⇄ in the mock).
 

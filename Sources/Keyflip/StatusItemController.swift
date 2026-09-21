@@ -4,11 +4,13 @@ import LayoutConversion
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
     private let statusItem: NSStatusItem
-    private let settings: SettingsStore
-    private let pair: Pair
+    let settings: SettingsStore
+    let pair: Pair
     private let tap: EventTap
     private var recordPanel: NSPanel?
     private var menuIsOpen = false
+    var pairView: PairColumnsView?
+    var pillsView: PillsView?
     var onShowSetup: (() -> Void)?
 
     /// The item's menu bar identity, which has to stay the same forever.
@@ -60,17 +62,19 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menuIsOpen { return }
+        pair.reloadFromSystem()
         rebuild(menu)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem.menu else { return }
         menuIsOpen = true
         tap.session.end(reason: .menuOpened)
         cancelRecording()
-        pair.reloadFromSystem()
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusItem.menu else { return }
         menuIsOpen = false
     }
 
@@ -79,9 +83,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         menu.autoenablesItems = false
         addAccessibilityGrant(to: menu)
         addTapRecovery(to: menu)
-        addPair(to: menu)
+        addPairControls(to: menu)
         menu.addItem(.separator())
-        addSettings(to: menu)
+        addPillControls(to: menu)
         menu.addItem(.separator())
         addFooter(to: menu)
     }
@@ -119,57 +123,13 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         }
     }
 
-    private func addPair(to menu: NSMenu) {
-        menu.addItem(Self.header("Pair"))
-        if pair.conversionMaps == nil {
-            let fix = NSMenuItem(title: "Choose two supported layouts…", action: #selector(showSetup), keyEquivalent: "")
-            fix.target = self
-            menu.addItem(fix)
-        }
-        let support = NSMenuItem(title: "Base and Shift characters only", action: nil, keyEquivalent: "")
-        support.isEnabled = false
-        support.toolTip = "Option characters, dead-key compositions, and IMEs are not supported."
-        menu.addItem(support)
-        for (slot, selected, blocked) in [(0, pair.slotA, pair.slotB), (1, pair.slotB, pair.slotA)] {
-            let name = pair.enabledLayouts.first { $0.id == selected }?.name ?? "Choose layout…"
-            let item = NSMenuItem(title: "Layout \(slot == 0 ? "A" : "B"): \(name)", action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            submenu.autoenablesItems = false
-            for layout in pair.enabledLayouts {
-                let choice = NSMenuItem(title: layout.name, action: #selector(chooseLayout(_:)), keyEquivalent: "")
-                choice.target = self
-                choice.tag = slot
-                choice.representedObject = layout.id
-                choice.state = layout.id == selected ? .on : .off
-                choice.isEnabled = layout.id != blocked && pair.supportsLayout(layout.id)
-                submenu.addItem(choice)
-            }
-            item.submenu = submenu
-            menu.addItem(item)
-        }
-    }
-
-    @objc private func chooseLayout(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        if sender.tag == 0 { pair.chooseSlotA(id) } else { pair.chooseSlotB(id) }
-    }
-
-    private func addSettings(to menu: NSMenu) {
-        let trigger = NSMenuItem(title: "Set trigger… (\(settings.trigger.glyph))", action: #selector(setTrigger), keyEquivalent: "")
-        trigger.target = self
-        menu.addItem(trigger)
-        let login = NSMenuItem(title: LaunchAtLogin.needsApproval ? "Launch at login: approval needed…" : "Launch at login", action: #selector(toggleLogin), keyEquivalent: "")
-        login.target = self
-        login.state = LaunchAtLogin.isEnabled ? .on : .off
-        menu.addItem(login)
-    }
-
-    @objc private func setTrigger() {
+    @objc func setTrigger() {
         statusItem.menu?.cancelTracking()
         DispatchQueue.main.async { [weak self] in self?.beginRecording() }
     }
 
-    @objc private func toggleLogin() {
+    @objc func toggleLogin() {
+        defer { refreshLoginControl() }
         switch LaunchAtLogin.toggle() {
         case .changed: break
         case .requiresApproval: LaunchAtLogin.openSettings()
@@ -180,7 +140,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
         }
     }
 
-    @objc private func showSetup() {
+    @objc func showSetup() {
         statusItem.menu?.cancelTracking()
         DispatchQueue.main.async { [weak self] in self?.onShowSetup?() }
     }
@@ -210,14 +170,20 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
         let quit = NSMenuItem(
             title: "Quit Keyflip",
-            action: #selector(NSApplication.terminate(_:)),
+            action: #selector(quitApplication),
             keyEquivalent: "q"
         )
-        quit.target = NSApp
+        quit.target = self
         menu.addItem(quit)
     }
 
-    private static func header(_ title: String) -> NSMenuItem {
+    // A separate action avoids AppKit adding its standard Quit icon and
+    // reserving an image column for every item in this section.
+    @objc private func quitApplication() {
+        NSApp.terminate(nil)
+    }
+
+    static func header(_ title: String) -> NSMenuItem {
         if #available(macOS 14.0, *) {
             return .sectionHeader(title: title)
         }
@@ -255,6 +221,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSWindowDelegate {
             case .captured(let trigger):
                 self.settings.trigger = trigger
                 self.tap.setTrigger(trigger)
+                self.pillsView?.setTriggerGlyph(trigger.glyph)
                 self.cancelRecording()
             }
         }
