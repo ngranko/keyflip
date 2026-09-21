@@ -271,20 +271,19 @@ enum FieldAccess {
         DebugLog.event("ax focusedUIElement \(axName(err))")
 
         // Some apps only answer through their own application element.
-        var app: AnyObject?
         guard AXBudget.prepare(system) else { return .failed(.unsupported) }
-        let appErr = AXUIElementCopyAttributeValue(
-            system,
-            kAXFocusedApplicationAttribute as CFString,
-            &app
-        )
-        if appErr == .apiDisabled {
-            return .failed(.unavailable)
+        let appElement: AXUIElement
+        switch FocusedApplication.resolve(readSystem: {
+            var app: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &app)
+            let element = app.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+            return (error, element)
+        }) {
+        case .found(let app): appElement = app
+        case .unavailable: return .failed(.unavailable)
+        case .missing: return .failed(.noFocus)
         }
-        guard appErr == .success, let app else {
-            return .failed(.noFocus)
-        }
-        let appElement = app as! AXUIElement
+        ElectronAccessibility.enableIfNeeded(in: appElement)
         guard AXBudget.prepare(appElement) else { return .failed(.unsupported) }
         var inner: AnyObject?
         let innerErr = AXUIElementCopyAttributeValue(
@@ -293,6 +292,9 @@ enum FieldAccess {
             &inner
         )
         guard innerErr == .success, let inner else {
+            let name = string(appElement, kAXTitleAttribute as CFString) ?? "?"
+            DebugLog.event("ax app=\(name) focusedUIElement \(axName(innerErr))")
+            if innerErr == .apiDisabled { return .failed(.unavailable) }
             return .failed(.noFocus)
         }
         return .element(inner as! AXUIElement)

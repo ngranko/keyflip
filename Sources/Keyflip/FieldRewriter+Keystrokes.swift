@@ -3,6 +3,23 @@ import LayoutConversion
 
 @MainActor
 extension FieldRewriter {
+    func retypeAtConfirmedCaret(
+        _ target: Target, as output: String, in snapshot: FieldSnapshot,
+        then done: @escaping (RewriteOutcome) -> Void
+    ) -> Bool {
+        let reading = snapshot.reading
+        guard let run = session.lastRun,
+              reading.selectedText.isEmpty, reading.selectedRange.length == 0,
+              target.range.upperBound == reading.selectedRange.location,
+              target.text == run.text || target.text == run.text + run.trailing,
+              target.range.location >= 0, target.range.upperBound <= reading.value.utf16.count,
+              (reading.value as NSString).substring(with: target.range) == target.text else { return false }
+        // No selection has been queued on this path, so there is nothing to
+        // wait for before the existing caret and ownership checks run.
+        typeBlindFromMirror(target, as: output, in: snapshot, then: done)
+        return true
+    }
+
     /// The rungs below a write, for a field that reads but will not take one.
     func retype(
         _ target: Target,

@@ -77,6 +77,7 @@ final class EventTap: @unchecked Sendable {
         ) { [weak self] _ in
             self?.session.end(reason: .appActivated)
             self?.cancelRecordingAfterAppSwitch()
+            ElectronAccessibility.prepareFrontmost()
         }
     }
 

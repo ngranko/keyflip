@@ -90,6 +90,7 @@ final class FieldRewriter {
         }
         guard !refusals.shouldSkip(snapshot) else {
             DebugLog.event("ax write known-refused in \(snapshot.reading.app) → retype")
+            if retypeAtConfirmedCaret(target, as: output, in: snapshot, then: done) { return }
             retype(target, as: output, in: snapshot, then: done)
             return
         }

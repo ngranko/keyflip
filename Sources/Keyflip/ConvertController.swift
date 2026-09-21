@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 import LayoutConversion
@@ -10,6 +11,7 @@ final class ConvertController {
     private let pair: Pair
     private let rewriter: FieldRewriter
     private let reader: FieldReader
+    private var waitingForFocus = false
 
     init(
         settings: SettingsStore,
@@ -26,6 +28,7 @@ final class ConvertController {
     }
 
     func start() {
+        ElectronAccessibility.prepareFrontmost()
         tap.onTrigger = { [weak self] in
             Task { @MainActor in self?.handleTrigger() }
         }
@@ -38,7 +41,8 @@ final class ConvertController {
         )
     }
 
-    func handleTrigger() {
+    func handleTrigger(retryingFocus: Bool = false) {
+        guard !waitingForFocus else { return }
         guard !rewriter.isSettling else {
             DebugLog.event("ignored: previous rewrite still settling")
             return
@@ -56,6 +60,7 @@ final class ConvertController {
 
         switch read {
         case .noFocus:
+            if !retryingFocus, waitForAccessibility(revision: revision) { return }
             // Not an AX failure — the plainest "no target" there is.
             DebugLog.event("field: no focus → toggle")
             togglePair()
@@ -82,6 +87,25 @@ final class ConvertController {
             )
             convertField(snap, slotA: slotA, slotB: slotB)
         }
+    }
+
+    private func waitForAccessibility(revision: UInt64) -> Bool {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+        let delay = ElectronAccessibility.remainingDelay(for: pid)
+        guard delay > 0 else { return false }
+        waitingForFocus = true
+        DebugLog.event("waiting for accessibility activation pid=\(pid)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.waitingForFocus = false
+            guard self.tap.session.inputRevision == revision,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                DebugLog.event("accessibility activation retry cancelled: input or app changed")
+                return
+            }
+            self.handleTrigger(retryingFocus: true)
+        }
+        return true
     }
 
     private func convertField(_ snap: FieldSnapshot, slotA: LayoutMap, slotB: LayoutMap) {
