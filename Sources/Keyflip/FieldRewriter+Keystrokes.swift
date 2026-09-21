@@ -30,7 +30,12 @@ extension FieldRewriter {
         guard !typeOverSelection(target, as: output, in: snapshot, via: .ourSelection, then: done) else {
             return
         }
-        typeBlindFromMirror(target, as: output, in: snapshot, then: done)
+        guard canContinue() else { done(.failed); return }
+        // A failed selection readback can still have queued a selection in the
+        // editor. Let it land before trusting a collapsed caret for backspaces.
+        holdTrigger(for: Self.keySettle) { [weak self] in
+            self?.typeBlindFromMirror(target, as: output, in: snapshot, then: done)
+        }
     }
 
     /// Put the target under a selection the field agrees with and type over it:

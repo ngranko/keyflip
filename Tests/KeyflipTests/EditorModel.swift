@@ -10,6 +10,7 @@ final class EditorModel: FieldReader, FieldWriter {
     private(set) var caretMoves = 0
     var dropNextInsertion = false
     var insertWithoutReplacing = false
+    var delaysSelection = false
     private var deliveries: [() -> Void] = []
     private(set) var keyWrites = 0
 
@@ -34,6 +35,13 @@ final class EditorModel: FieldReader, FieldWriter {
     func select(_ snapshot: FieldSnapshot, range: NSRange, expecting text: String) -> Bool {
         let value = current.reading.value as NSString
         guard range.upperBound <= value.length, value.substring(with: range) == text else { return false }
+        if delaysSelection {
+            deliveries.append {
+                self.current.reading.selectedRange = range
+                self.current.reading.selectedText = text
+            }
+            return false
+        }
         current.reading.selectedRange = range
         current.reading.selectedText = text
         return true
@@ -52,7 +60,8 @@ final class EditorModel: FieldReader, FieldWriter {
         keyWrites += 1
         deliveries.append {
             let selection = self.current.reading.selectedRange
-            let range = selection.length > 0 ? selection : NSRange(location: selection.location - count, length: count)
+            let remaining = max(0, count - (selection.length > 0 ? 1 : 0))
+            let range = NSRange(location: selection.location - remaining, length: selection.length + remaining)
             self.apply(self.dropNextInsertion ? "" : text, to: range)
             self.dropNextInsertion = false
         }
