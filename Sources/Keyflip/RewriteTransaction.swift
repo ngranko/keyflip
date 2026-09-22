@@ -18,6 +18,7 @@ final class RewriteTransaction {
     }
 
     func canContinue() -> Bool {
+        // Input can arrive on the tap thread while the accessibility focus read blocks.
         guard !cancelled, session.inputRevision == revision,
               reader.isFocused(snapshot), session.inputRevision == revision else {
             cancelled = true

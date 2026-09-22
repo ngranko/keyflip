@@ -11,7 +11,7 @@ class MenuControlsView: NSView {
     func registerControls(_ controls: [HoverView]) {
         self.controls = controls
         for control in controls {
-            control.onHover = { [weak self, weak control] in self?.focus(control) }
+            control.onHover = { [weak self, weak control] in self?.focus(control, showOutline: false) }
             control.onHoverExit = { [weak self, weak control] in
                 guard let self, self.focused === control else { return }
                 self.focus(nil)
@@ -21,7 +21,7 @@ class MenuControlsView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         if focused?.acceptsHover != true {
-            focus(controls.first { $0.acceptsHover })
+            focus(controls.first { $0.acceptsHover }, showOutline: NSApp.currentEvent?.type == .keyDown)
         }
         return true
     }
@@ -39,7 +39,10 @@ class MenuControlsView: NSView {
     override func keyDown(with event: NSEvent) {
         // AppKit already moved between menu items for these events. Handling
         // them again would skip the first row of the newly focused section.
-        if event.keyCode == 125 || event.keyCode == 126 { return }
+        if event.keyCode == 125 || event.keyCode == 126 {
+            focus(focused ?? controls.first { $0.acceptsHover })
+            return
+        }
         if !handleNavigation(event) { super.keyDown(with: event) }
     }
 
@@ -63,6 +66,7 @@ class MenuControlsView: NSView {
             focus(forward ? controls.first : controls.last)
             return true
         }
+        focused.setKeyboardFocus(true)
         let next = index + (forward ? 1 : -1)
         guard controls.indices.contains(next) else { return false }
         focus(controls[next])
@@ -74,9 +78,9 @@ class MenuControlsView: NSView {
         _ = focused.accessibilityPerformPress()
     }
 
-    private func focus(_ control: HoverView?) {
+    private func focus(_ control: HoverView?, showOutline: Bool = true) {
         focused?.setKeyboardFocus(false)
         focused = control
-        focused?.setKeyboardFocus(true)
+        focused?.setKeyboardFocus(showOutline)
     }
 }

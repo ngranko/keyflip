@@ -3,6 +3,10 @@ import LayoutConversion
 
 @MainActor
 extension FieldRewriter {
+    private func matchesMirror(_ text: String, run: (text: String, trailing: String)) -> Bool {
+        text == run.text || text == run.text + run.trailing
+    }
+
     func retypeAtConfirmedCaret(
         _ target: Target, as output: String, in snapshot: FieldSnapshot,
         then done: @escaping (RewriteOutcome) -> Void
@@ -11,7 +15,7 @@ extension FieldRewriter {
         guard let run = session.lastRun,
               reading.selectedText.isEmpty, reading.selectedRange.length == 0,
               target.range.upperBound == reading.selectedRange.location,
-              target.text == run.text || target.text == run.text + run.trailing,
+              matchesMirror(target.text, run: run),
               target.range.location >= 0, target.range.upperBound <= reading.value.utf16.count,
               (reading.value as NSString).substring(with: target.range) == target.text else { return false }
         // No selection has been queued on this path, so there is nothing to
@@ -74,7 +78,7 @@ extension FieldRewriter {
         then done: @escaping (RewriteOutcome) -> Void
     ) {
         guard let typed = session.lastRun,
-              target.text == typed.text || target.text == typed.text + typed.trailing else {
+              matchesMirror(target.text, run: typed) else {
             DebugLog.event("keys skipped: no selection and no matching mirror")
             done(.failed)
             return

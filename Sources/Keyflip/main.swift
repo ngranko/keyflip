@@ -23,7 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pair: pair,
             reader: reader,
             rewriter: FieldRewriter(
-                settings: settings,
                 session: tap.session,
                 reader: reader,
                 writer: AXFieldWriter(),

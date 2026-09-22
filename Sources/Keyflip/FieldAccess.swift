@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Carbon
 import Foundation
 import LayoutConversion
@@ -11,8 +12,7 @@ enum FieldAccess {
         switch focusedElement() {
         case .failed(let read):
             return read
-        case .element(let focused):
-            let element = focused
+        case .element(let element):
             _ = AXBudget.prepare(element)
             if isSecure(element) {
                 return .secure
@@ -242,9 +242,12 @@ enum FieldAccess {
     }
 
     private static func focusedAppName() -> String {
-        let system = AXUIElementCreateSystemWide()
-        guard let app = copy(system, kAXFocusedApplicationAttribute as CFString) else { return "?" }
-        return string(app as! AXUIElement, kAXTitleAttribute as CFString) ?? "?"
+        NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+    }
+
+    static func castElement(_ value: CFTypeRef?) -> AXUIElement? {
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
     }
 
     private enum FocusResult {
@@ -262,8 +265,8 @@ enum FieldAccess {
             kAXFocusedUIElementAttribute as CFString,
             &focused
         )
-        if err == .success, let focused {
-            return .element(focused as! AXUIElement)
+        if err == .success, let element = castElement(focused) {
+            return .element(element)
         }
         if err == .apiDisabled {
             return .failed(.unavailable)
@@ -276,7 +279,7 @@ enum FieldAccess {
         switch FocusedApplication.resolve(readSystem: {
             var app: CFTypeRef?
             let error = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &app)
-            let element = app.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+            let element = castElement(app)
             return (error, element)
         }) {
         case .found(let app): appElement = app
@@ -291,13 +294,13 @@ enum FieldAccess {
             kAXFocusedUIElementAttribute as CFString,
             &inner
         )
-        guard innerErr == .success, let inner else {
+        guard innerErr == .success, let element = castElement(inner) else {
             let name = string(appElement, kAXTitleAttribute as CFString) ?? "?"
             DebugLog.event("ax app=\(name) focusedUIElement \(axName(innerErr))")
             if innerErr == .apiDisabled { return .failed(.unavailable) }
             return .failed(.noFocus)
         }
-        return .element(inner as! AXUIElement)
+        return .element(element)
     }
 
     /// AXValue is often empty in web/Electron fields while
@@ -393,7 +396,6 @@ enum FieldAccess {
         return set(element, kAXSelectedTextRangeAttribute as CFString, ax)
     }
 
-    /// A range the field will accept: inside the text, never inverted.
     private static func copy(_ element: AXUIElement, _ attr: CFString) -> AnyObject? {
         guard AXBudget.prepare(element) else { return nil }
         var value: AnyObject?

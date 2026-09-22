@@ -27,38 +27,34 @@ extension FieldRewriter {
         allowUnverified: Bool = false,
         then done: @escaping (RewriteOutcome) -> Void
     ) {
-        let complete = done
-        let done: (RewriteOutcome) -> Void = { [weak self] outcome in
+        let settleCaretThenComplete: (RewriteOutcome) -> Void = { [weak self] outcome in
             guard let self, outcome == .applied, let range,
                   case .field(let snapshot) = reader.read(), transaction?.owns(snapshot) == true else {
-                complete(outcome)
+                done(outcome)
                 return
             }
             let caret = NSRange(location: range.location + text.utf16.count, length: 0)
-            guard snapshot.reading.selectedRange != caret else { complete(.applied); return }
-            settleCaret(in: snapshot, after: range, text: text, then: complete)
+            guard snapshot.reading.selectedRange != caret else { done(.applied); return }
+            settleCaret(in: snapshot, after: range, text: text, then: done)
         }
         holdTrigger(for: Self.keySettle) { [weak self] in
-            guard let self else {
-                done(.unknown)
-                return
-            }
+            guard let self else { return }
             switch restoreIfKeysVanished(expecting: text, in: app, wasShowing: previous, replacing: range, allowUnverified: allowUnverified) {
             case .unnecessary(let outcome):
-                done(outcome)
+                settleCaretThenComplete(outcome)
             // The words are gone and the app would not take them back, so the
             // caller must not follow: switching the layout now leaves the user
             // in a foreign source with nothing to show for it.
             case .refused:
-                done(.failed)
+                settleCaretThenComplete(.failed)
             // The repair is keystrokes too, and needs the same room to land.
             case .typed:
                 holdTrigger(for: Self.keySettle) { [weak self] in
-                    guard let self else { done(.unknown); return }
+                    guard let self else { return }
                     let check = restoreIfKeysVanished(expecting: text, in: app, wasShowing: previous,
                                                      replacing: range, allowUnverified: allowUnverified, allowRepair: false)
-                    if case .unnecessary(let outcome) = check { done(outcome) }
-                    else { done(.unknown) }
+                    if case .unnecessary(let outcome) = check { settleCaretThenComplete(outcome) }
+                    else { settleCaretThenComplete(.unknown) }
                 }
             }
         }

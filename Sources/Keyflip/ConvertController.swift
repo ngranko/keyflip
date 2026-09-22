@@ -29,8 +29,8 @@ final class ConvertController {
 
     func start() {
         ElectronAccessibility.prepareFrontmost()
-        tap.onTrigger = { [weak self] in
-            Task { @MainActor in self?.handleTrigger() }
+        tap.onTrigger = { [weak self] revision in
+            self?.handleTrigger(revision: revision)
         }
         DebugLog.event(
             "start tap=\(tap.modeDescription) accessibility=\(AXIsProcessTrusted()) " +
@@ -41,8 +41,15 @@ final class ConvertController {
         )
     }
 
-    func handleTrigger(retryingFocus: Bool = false) {
-        guard !waitingForFocus else { return }
+    func handleTrigger(revision: UInt64, retryingFocus: Bool = false) {
+        guard !waitingForFocus else {
+            DebugLog.event("ignored: waiting for accessibility activation")
+            return
+        }
+        guard tap.session.inputRevision == revision else {
+            DebugLog.event("cancelled: input changed after trigger")
+            return
+        }
         guard !rewriter.isSettling else {
             DebugLog.event("ignored: previous rewrite still settling")
             return
@@ -51,11 +58,11 @@ final class ConvertController {
             DebugLog.event("abort: pair not ready (\(pair.slotA ?? "nil")/\(pair.slotB ?? "nil"))")
             return
         }
-        let (slotA, slotB) = (maps.slotA, maps.slotB)
-
-        let revision = tap.session.inputRevision
         let read = reader.read()
-        guard tap.session.inputRevision == revision else { return }
+        guard tap.session.inputRevision == revision else {
+            DebugLog.event("cancelled: input changed during field read")
+            return
+        }
         Permissions.promptIfAccessibilityLapsed(available: read.accessibilityAvailable)
 
         switch read {
@@ -85,7 +92,7 @@ final class ConvertController {
                 "value=\(DebugLog.describeText(reading.value)) " +
                 "sel=\(reading.selectedRange) selected=\(DebugLog.describeText(reading.selectedText))"
             )
-            convertField(snap, slotA: slotA, slotB: slotB)
+            convertField(snap, maps: maps)
         }
     }
 
@@ -103,23 +110,24 @@ final class ConvertController {
                 DebugLog.event("accessibility activation retry cancelled: input or app changed")
                 return
             }
-            self.handleTrigger(retryingFocus: true)
+            self.handleTrigger(revision: revision, retryingFocus: true)
         }
         return true
     }
 
-    private func convertField(_ snap: FieldSnapshot, slotA: LayoutMap, slotB: LayoutMap) {
+    private func convertField(_ snap: FieldSnapshot, maps: (slotA: LayoutMap, slotB: LayoutMap)) {
         let verdict = TargetSelection.choose(in: snap.reading, session: tap.session, note: log)
         switch verdict {
         case .field(let target):
-            apply(target, snapshot: snap, slotA: slotA, slotB: slotB)
+            DebugLog.event("target: \(DebugLog.describeText(target.text)) range=\(target.range)")
+            apply(target.text, maps: maps) { output, done in
+                rewriter.rewrite(target, to: output, in: snap, then: done)
+            }
         case .mirror(let text, let trailing):
-            applyTyped(
-                (text: text, trailing: trailing),
-                in: snap,
-                slotA: slotA,
-                slotB: slotB
-            )
+            DebugLog.event("target: typed \(DebugLog.describeText(text))")
+            apply(text, maps: maps, via: " (keys)") { output, done in
+                rewriter.typeOverMirror((text, trailing), as: output, in: snap, then: done)
+            }
         case .none, .unusable:
             togglePair()
         }
@@ -141,27 +149,6 @@ final class ConvertController {
         }
     }
 
-    private func applyTyped(
-        _ target: (text: String, trailing: String),
-        in snapshot: FieldSnapshot,
-        slotA: LayoutMap,
-        slotB: LayoutMap
-    ) {
-        DebugLog.event("target: typed \(DebugLog.describeText(target.text))")
-        guard let conv = convert(target.text, slotA: slotA, slotB: slotB, via: " (keys)") else {
-            return
-        }
-        guard conv.output != target.text else {
-            follow(conv.destinationID)
-            return
-        }
-        rewriter.typeOverMirror(target, as: conv.output, in: snapshot) { [weak self] rewritten in
-            if rewritten.shouldFollow {
-                self?.follow(conv.destinationID)
-            }
-        }
-    }
-
     private func follow(_ destination: String) {
         DebugLog.event("follow \(destination) ok=\(InputSources.select(destination))")
     }
@@ -179,24 +166,19 @@ final class ConvertController {
     }
 
     private func apply(
-        _ target: Target,
-        snapshot: FieldSnapshot,
-        slotA: LayoutMap,
-        slotB: LayoutMap
+        _ text: String,
+        maps: (slotA: LayoutMap, slotB: LayoutMap),
+        via route: String = "",
+        rewrite: (String, @escaping (RewriteOutcome) -> Void) -> Void
     ) {
-        DebugLog.event("target: \(DebugLog.describeText(target.text)) range=\(target.range)")
-        guard let conv = convert(target.text, slotA: slotA, slotB: slotB) else { return }
-        guard conv.output != target.text else {
-            // Follow whenever conversion ran, even when no character changed.
+        guard let conv = convert(text, slotA: maps.slotA, slotB: maps.slotB, via: route) else { return }
+        guard conv.output != text else {
             follow(conv.destinationID)
             return
         }
-        // Follow only once the rewrite has settled, so the layout does not
-        // change 150ms before the text it belongs to.
-        rewriter.rewrite(target, to: conv.output, in: snapshot) { [weak self] rewritten in
-            if rewritten.shouldFollow {
-                self?.follow(conv.destinationID)
-            }
+        // Changing the layout before the rewrite settles can interrupt its keystrokes.
+        rewrite(conv.output) { [weak self] rewritten in
+            if rewritten.shouldFollow { self?.follow(conv.destinationID) }
         }
     }
 

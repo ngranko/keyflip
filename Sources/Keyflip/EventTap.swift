@@ -16,7 +16,7 @@ import os
 /// rule that outranks every feature: an event this app cannot deal with right
 /// now goes through untouched (ADR 0009).
 final class EventTap: @unchecked Sendable {
-    var onTrigger: (() -> Void)?
+    var onTrigger: (@MainActor (UInt64) -> Void)?
 
     let session = TypingSession { reset in
         DebugLog.event(
@@ -108,9 +108,7 @@ final class EventTap: @unchecked Sendable {
         port.stop()
         session.end(reason: .tapStopped)
         stopRecording()
-        lock.lock()
         recognizer.reset()
-        lock.unlock()
     }
 
     func rearm() { port.rearm() }
@@ -227,8 +225,9 @@ final class EventTap: @unchecked Sendable {
         let match = recognizer.handle(tapEvent, at: now)
         if match == .consumed { return nil }
         if match == .fired {
+            let revision = session.inputRevision
             DebugLog.event("trigger fired session=\(session.isLive)")
-            DispatchQueue.main.async { [weak self] in self?.onTrigger?() }
+            DispatchQueue.main.async { [weak self] in self?.onTrigger?(revision) }
             // Swallow a chord so ⌥L fires the trigger instead of typing "¬".
             // A double-tap fires on a modifier release, which must pass through.
             return tapEvent.kind == .keyDown ? nil : passthrough

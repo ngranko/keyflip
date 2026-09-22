@@ -17,8 +17,7 @@ func resumedWordSurvivesDelayedSelectionAndRepeatedRewrites(trailing: String) {
     session.end(reason: .appActivated)
     session.handle(TapEvent(kind: .keyDown, keyCode: 0, flags: 0, characters: "dtn" + trailing))
     let wait = ManualWait()
-    let defaults = UserDefaults(suiteName: "KeyflipResumedWord-\(UUID().uuidString)")!
-    let rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: session,
+    let rewriter = FieldRewriter(session: session,
                                  reader: editor, writer: editor, wait: wait)
 
     for output in ["вет", "dtn", "вет"] {

@@ -15,8 +15,7 @@ func knownRefusingEditorRewritesBufferBeforeAnyWait(trailing: String) {
     refusals.noteFailure(editor.current)
     refusals.noteFailure(editor.current)
     let wait = ManualWait()
-    let defaults = UserDefaults(suiteName: "KeyflipLatency-\(UUID().uuidString)")!
-    let rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: session,
+    let rewriter = FieldRewriter(session: session,
                                  reader: editor, writer: editor, wait: wait, refusals: refusals)
     var outcome: RewriteOutcome?
     rewriter.rewrite(Target(text: "dtn", range: NSRange(location: prefix.utf16.count, length: 3)),

@@ -12,6 +12,8 @@ struct MenuKeyboardTests {
         let view = MenuControlsView()
         view.registerControls(controls)
         #expect(view.becomeFirstResponder())
+        #expect(!controls[0].keyboardFocused)
+        view.keyDown(with: press(125))
         #expect(controls[0].keyboardFocused)
         view.keyDown(with: press(124))
         #expect(controls[2].keyboardFocused)
@@ -53,7 +55,7 @@ struct MenuKeyboardTests {
         let view = MenuControlsView()
         view.registerControls([control])
         control.mouseEntered(with: crossBoundary(.mouseEntered))
-        #expect(control.keyboardFocused)
+        #expect(!control.keyboardFocused)
         control.mouseExited(with: crossBoundary(.mouseExited))
         #expect(!control.keyboardFocused)
         view.keyDown(with: press(124))
@@ -69,6 +71,8 @@ struct MenuKeyboardTests {
         second.mouseEntered(with: crossBoundary(.mouseEntered))
         first.mouseExited(with: crossBoundary(.mouseExited))
         #expect(!first.keyboardFocused)
+        #expect(!second.keyboardFocused)
+        view.keyDown(with: press(124))
         #expect(second.keyboardFocused)
     }
 

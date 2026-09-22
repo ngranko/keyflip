@@ -55,14 +55,12 @@ final class FieldRewriter {
     private static let recoverAttempts = 10
 
     init(
-        settings: SettingsStore,
         session: TypingSession,
         reader: FieldReader,
         writer: FieldWriter,
         wait: Wait,
         refusals: WriteRefusals = WriteRefusals()
     ) {
-        settings.clearLegacyRefusals()
         self.session = session
         self.reader = reader
         self.writer = writer

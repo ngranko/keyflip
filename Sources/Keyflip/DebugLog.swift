@@ -146,13 +146,13 @@ enum DebugLogWindow {
                 DispatchQueue.main.async { DebugLogWindow.refresh() }
             }
         }
-        refresh()
         NSApp.activate(ignoringOtherApps: true)
         panel?.makeKeyAndOrderFront(nil)
+        refresh()
     }
 
     private static func refresh() {
-        guard let view else { return }
+        guard panel?.isVisible == true, let view else { return }
         view.string = DebugLog.snapshot()
         view.scrollToEndOfDocument(nil)
     }

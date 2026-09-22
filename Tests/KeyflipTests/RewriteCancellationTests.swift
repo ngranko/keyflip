@@ -33,8 +33,7 @@ private final class RewriteScenario {
 
     init() {
         reader = ChangingField(original)
-        let defaults = UserDefaults(suiteName: "KeyflipCancellation-\(UUID().uuidString)")!
-        rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: session,
+        rewriter = FieldRewriter(session: session,
                                  reader: reader, writer: writer, wait: wait)
         session.handle(TapEvent(kind: .keyDown, keyCode: 0, flags: 0, characters: "ghbdtn"))
     }
@@ -182,8 +181,7 @@ private final class RewriteScenario {
         return
     }
     let writer = ScriptedWriter()
-    let defaults = UserDefaults(suiteName: "KeyflipTerminal-\(UUID().uuidString)")!
-    let rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: session,
+    let rewriter = FieldRewriter(session: session,
                                  reader: ChangingField(original), writer: writer, wait: ImmediateWait())
     var result: Bool?
     rewriter.typeOverMirror((text: text, trailing: trailing), as: "привет", in: original) { result = $0.shouldFollow }

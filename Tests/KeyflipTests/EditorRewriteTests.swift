@@ -13,8 +13,7 @@ private final class EditorScenario {
 
     init(_ text: String) {
         editor = EditorModel(text)
-        let defaults = UserDefaults(suiteName: "KeyflipEditorTests-\(UUID().uuidString)")!
-        rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: session,
+        rewriter = FieldRewriter(session: session,
                                  reader: editor, writer: editor, wait: wait)
         session.handle(TapEvent(kind: .keyDown, keyCode: 0, flags: 0, characters: text))
     }
@@ -110,8 +109,7 @@ private final class EditorScenario {
     let selected = snapshot(reading(value: "", caret: 0, selectionLength: 6, selectedText: "ghbdtn"))
     let writer = ScriptedWriter()
     let reader = ScriptedField(always: selected.reading)
-    let defaults = UserDefaults(suiteName: "KeyflipUnreadableSelection-\(UUID().uuidString)")!
-    let rewriter = FieldRewriter(settings: SettingsStore(defaults: defaults), session: TypingSession(),
+    let rewriter = FieldRewriter(session: TypingSession(),
                                  reader: reader, writer: writer, wait: ImmediateWait())
     var outcome: RewriteOutcome?
     rewriter.rewrite(Target(text: "ghbdtn", range: selected.reading.selectedRange), to: "привет", in: selected) {

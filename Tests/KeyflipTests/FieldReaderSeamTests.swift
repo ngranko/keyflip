@@ -5,10 +5,7 @@ import Testing
 
 @MainActor
 private func rewriter(reading readings: [FieldReading]) -> FieldRewriter {
-    let defaults = UserDefaults(suiteName: "KeyflipTests")!
-    defaults.removePersistentDomain(forName: "KeyflipTests")
     return FieldRewriter(
-        settings: SettingsStore(defaults: defaults),
         session: TypingSession(),
         reader: ScriptedField(showing: readings),
         writer: ScriptedWriter(),

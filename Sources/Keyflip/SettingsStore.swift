@@ -4,6 +4,7 @@ import LayoutConversion
 final class SettingsStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private enum Key {
+        static let setupCompleted = "setupCompleted"
         static let slotA = "slotA"
         static let slotB = "slotB"
         static let trigger = "trigger"
@@ -12,11 +13,12 @@ final class SettingsStore: @unchecked Sendable {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        defaults.removeObject(forKey: Key.axWriteRefused)
     }
 
     var setupCompleted: Bool {
-        get { defaults.bool(forKey: "setupCompleted") }
-        set { defaults.set(newValue, forKey: "setupCompleted") }
+        get { defaults.bool(forKey: Key.setupCompleted) }
+        set { defaults.set(newValue, forKey: Key.setupCompleted) }
     }
 
     var slotA: String? {
@@ -42,8 +44,6 @@ final class SettingsStore: @unchecked Sendable {
             }
         }
     }
-
-    func clearLegacyRefusals() { defaults.removeObject(forKey: Key.axWriteRefused) }
 
     func pairIDs() -> (String, String)? {
         guard let a = slotA, let b = slotB, a != b else { return nil }

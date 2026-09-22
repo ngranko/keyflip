@@ -51,9 +51,6 @@ private struct Ladder {
         alreadyRefused: Set<String> = [],
         readsBack: FieldReading? = nil
     ) {
-        let defaults = UserDefaults(suiteName: "KeyflipRungTests")!
-        defaults.removePersistentDomain(forName: "KeyflipRungTests")
-        let settings = SettingsStore(defaults: defaults)
         let refusals = WriteRefusals()
         self.writer = writer
         self.refusals = refusals
@@ -65,7 +62,6 @@ private struct Ladder {
         let reader = readsBack.map { ScriptedField(showing: [$0]) } ?? ScriptedField(always: reading)
         if readsBack == nil { writer.onType = { reader.repeating = .field(snapshot(field(showing: output))) } }
         self.rewriter = FieldRewriter(
-            settings: settings,
             session: liveSession(typing: mirror),
             reader: reader,
             writer: writer,
