@@ -149,29 +149,9 @@ enum FieldAccess {
     ) -> WriteCheck {
         guard let element = snapshot.handle.element else { return .unreadable }
         guard let contents = textContents(element) else { return .unreadable }
-        let value = contents.value as NSString
-        guard value.length > 0 else { return .unreadable }
-        let before = snapshot.reading.value as NSString
-        let wrote = (newText as NSString).length
-        if slice(value, at: range.location, length: wrote) == newText {
-            // The output being there does not prove the original left: an
-            // inserting write leaves both and the slice matches either way,
-            // which is how a field holding “Никит” *and* “Ybrbn” was logged as
-            // a confirmed replace. Length is what tells them apart, so skip the
-            // check only for the browser case with no readable value.
-            guard before.length > 0 else { return .applied }
-            let expected = before.length - range.length + wrote
-            if value.length == expected { return .applied }
-            let completion = contents.range
-            let completed = completion.location == range.location + wrote
-                && completion.upperBound == value.length
-                && value.length - completion.length == expected
-            return completed ? .completed : .mangled(value as String)
-        }
-        if slice(value, at: range.location, length: (original as NSString).length) == original {
-            return .unchanged
-        }
-        return .mangled(value as String)
+        return WriteVerification.classify(value: contents.value, selection: contents.range,
+                                          before: snapshot.reading.value, range: range,
+                                          wrote: newText, over: original)
     }
 
     /// Put the target under an AX selection and confirm the field agrees.
@@ -216,7 +196,7 @@ enum FieldAccess {
         guard let element = snapshot.handle.element else { return .unreadable }
         let caret = NSRange(location: snapshot.reading.selectedRange.upperBound, length: 0)
         guard let before = textContents(element),
-              slice(before.value as NSString, at: caret.location - text.utf16.count,
+              WriteVerification.readSlice(before.value as NSString, at: caret.location - text.utf16.count,
                     length: text.utf16.count) == text else { return .textChanged }
         if selectedRange(element) == caret { return .collapsed }
         guard setRange(element, caret) else { return .unreadable }
@@ -230,15 +210,10 @@ enum FieldAccess {
         guard range.length == 0 else { return .selectionHeld }
         guard range.location == location else { return .wrongPosition }
         let length = text.utf16.count
-        guard !text.isEmpty, slice(value as NSString, at: location - length, length: length) == text else {
+        guard !text.isEmpty, WriteVerification.readSlice(value as NSString, at: location - length, length: length) == text else {
             return .textChanged
         }
         return .collapsed
-    }
-
-    private static func slice(_ value: NSString, at location: Int, length: Int) -> String? {
-        guard location >= 0, length >= 0, location + length <= value.length else { return nil }
-        return value.substring(with: NSRange(location: location, length: length))
     }
 
     private static func caret(after range: NSRange, _ newText: String) -> NSRange {

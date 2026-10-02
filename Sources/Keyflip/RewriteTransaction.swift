@@ -18,13 +18,20 @@ final class RewriteTransaction {
     }
 
     func canContinue() -> Bool {
+        guard !cancelled else { return false }
+        guard session.inputRevision == revision else { return cancel(reason: "inputChanged") }
         // Input can arrive on the tap thread while the accessibility focus read blocks.
-        guard !cancelled, session.inputRevision == revision,
-              reader.isFocused(snapshot), session.inputRevision == revision else {
-            cancelled = true
-            return false
-        }
+        let focused = reader.isFocused(snapshot)
+        guard session.inputRevision == revision else { return cancel(reason: "inputChangedDuringFocusCheck") }
+        guard focused else { return cancel(reason: "focusChangedOrUnavailable") }
         return true
+    }
+
+    private func cancel(reason: String) -> Bool {
+        cancelled = true
+        DebugLog.event("rewrite cancelled app=\(snapshot.reading.app) role=\(snapshot.reading.role) " +
+                       "reason=\(reason) expectedRevision=\(revision) observedRevision=\(session.inputRevision)")
+        return false
     }
 
     func owns(_ other: FieldSnapshot) -> Bool { snapshot.handle.matches(other.handle) }
