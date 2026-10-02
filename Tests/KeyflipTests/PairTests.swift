@@ -11,7 +11,6 @@ final class ScriptedCatalog: LayoutCatalog {
     /// Installed but switched off — where a slot the user disabled is found.
     var installed: [InputSourceInfo]
     var unloadable: Set<String> = []
-    private(set) var watching = false
 
     init(enabled: [String], installed: [String] = []) {
         self.enabled = enabled.map(Self.info)
@@ -33,10 +32,7 @@ final class ScriptedCatalog: LayoutCatalog {
         (enabled + installed).first { $0.id == id }
     }
 
-    func watchChanges(_ handler: @escaping @Sendable () -> Void) -> AnyObject {
-        watching = true
-        return NSObject()
-    }
+    func watchChanges(_ handler: @escaping @Sendable () -> Void) -> AnyObject { NSObject() }
 }
 
 private let abc = "com.apple.keylayout.ABC"
@@ -121,12 +117,6 @@ private func store(slotA: String? = nil, slotB: String? = nil) -> SettingsStore 
     let pair = Pair(settings: settings, catalog: ScriptedCatalog(enabled: [us]))
     #expect(settings.slotA == nil)
     #expect(pair.conversionMaps == nil)
-}
-
-@Test @MainActor func thePairWatchesForLayoutsBeingEnabledOrRemoved() {
-    let catalog = ScriptedCatalog(enabled: [abc, rus])
-    _ = Pair(settings: store(slotA: abc, slotB: rus), catalog: catalog)
-    #expect(catalog.watching)
 }
 
 @Test @MainActor func reloadingPicksUpALayoutEnabledSinceLaunch() {

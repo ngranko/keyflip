@@ -10,11 +10,6 @@ final class ScriptedField: FieldReader {
     private var reads: [FieldRead]
     var focusedHandle: FieldHandle?
 
-    init(_ reads: [FieldRead] = []) {
-        self.reads = reads
-        if case .field(let snapshot) = reads.first { focusedHandle = snapshot.handle }
-    }
-
     init(showing readings: [FieldReading]) {
         reads = readings.map { .field(snapshot($0)) }
         focusedHandle = readings.first.map { snapshot($0).handle }

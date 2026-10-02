@@ -81,4 +81,5 @@ final class ManualWait: Wait {
     private var callbacks: [() -> Void] = []
     func after(_ delay: TimeInterval, then work: @escaping () -> Void) { callbacks.append(work) }
     func advance() { if !callbacks.isEmpty { callbacks.removeFirst()() } }
+    func drain() { while !callbacks.isEmpty { advance() } }
 }

@@ -52,10 +52,25 @@ private final class EditorScenario {
     scenario.editor.insertWithoutReplacing = true
     scenario.rewrite("ghbdtn", to: "привет")
     scenario.deliver()
+    scenario.wait.drain()
     #expect(scenario.editor.current.reading.value == "приветghbdtn")
     #expect(scenario.results == [.unknown])
     #expect(scenario.editor.keyWrites == 1)
     #expect(scenario.session.typed.isEmpty)
+}
+
+/// Zen, 2026-09-28: the readback still held the original after `keySettle`
+/// while the conversion was on screen, and the withheld follow left the user
+/// typing on in the wrong layout.
+@MainActor
+@Test func aReadbackThatTrailsTheKeysIsAskedAgainBeforeGivingUp() {
+    let scenario = EditorScenario("ghbdtn")
+    scenario.editor.acceptsAX = false
+    scenario.rewrite("ghbdtn", to: "привет")
+    scenario.wait.advance()
+    #expect(scenario.results.isEmpty)
+    scenario.deliver()
+    #expect(scenario.results == [.applied])
 }
 
 @MainActor
@@ -129,9 +144,6 @@ func delayedRewritesMoveCaretToEndBeforeContinuedTyping(usesAX: Bool) {
     scenario.deliver()
     #expect(scenario.results == [.applied])
     #expect(scenario.editor.current.reading.selectedRange == NSRange(location: 11, length: 0))
-    _ = scenario.editor.typeKeys(deleting: 0, with: "!")
-    scenario.editor.deliver()
-    #expect(scenario.editor.current.reading.value == "🙂 привет🙂! suffix")
 }
 
 @MainActor

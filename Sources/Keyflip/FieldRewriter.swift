@@ -147,13 +147,15 @@ final class FieldRewriter {
         )
         guard canContinue() else { done(.failed); return }
         switch check {
-        case .applied:
+        case .applied, .completed:
             DebugLog.event(
                 "replace via \(Rung.accessibilityWrite.rawValue) confirmed " +
-                "after \(attempt) recheck(s)"
+                "after \(attempt) recheck(s)\(check == .completed ? " with inline completion" : "")"
             )
             refusals.noteSuccess(snapshot)
             syncMirror(after: target.text, became: output)
+            // Settling the caret would turn the app's completion into text the user never typed.
+            guard check == .applied else { done(.applied); return }
             settleCaret(in: snapshot, after: target.range, text: output, then: done)
         case .unreadable:
             session.discardMirror()

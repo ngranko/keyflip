@@ -4,13 +4,6 @@ import LayoutConversion
 import Testing
 @testable import Keyflip
 
-@MainActor
-private final class DeferredWait: Wait {
-    var work: [() -> Void] = []
-    func after(_ delay: TimeInterval, then work: @escaping () -> Void) { self.work.append(work) }
-    func advance() { if !work.isEmpty { work.removeFirst()() } }
-}
-
 private final class ChangingField: FieldReader {
     var state: FieldRead
     init(_ snapshot: FieldSnapshot) { state = .field(snapshot) }
@@ -26,7 +19,7 @@ private final class RewriteScenario {
     let original = snapshot(reading(value: "ghbdtn", caret: 6))
     let session = TypingSession()
     let writer = ScriptedWriter()
-    let wait = DeferredWait()
+    let wait = ManualWait()
     let reader: ChangingField
     let rewriter: FieldRewriter
     var results: [Bool] = []

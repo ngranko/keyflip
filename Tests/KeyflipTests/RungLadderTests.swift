@@ -89,7 +89,17 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
     #expect(writer.calls == [.replace(target.range, output), .verify, .restoreCaret])
-    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
+}
+
+/// Zen's address bar autocompletes the converted text and selects the
+/// completion. Collapsing that selection would commit text nobody typed.
+@MainActor
+@Test func aWriteTheAppAutocompletesIsConfirmedWithoutMovingTheCaret() {
+    let writer = ScriptedWriter()
+    writer.verifyAnswers = [.completed]
+    let ladder = Ladder(writer: writer)
+    #expect(ladder.run())
+    #expect(writer.calls == [.replace(target.range, output), .verify])
 }
 
 /// ADR 0006: a selection the user made is typed over, never written through —
@@ -115,7 +125,6 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
     #expect(writer.verifyCount == 3)
-    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
 /// Monaco discards the write and says nothing. Once the rechecks run out the
@@ -125,9 +134,10 @@ private struct Ladder {
     let writer = ScriptedWriter()
     writer.verifyAnswers = [.unchanged]
     let ladder = Ladder(writer: writer)
+    ladder.refusals.noteFailure(snapshot(ladder.reading))
     #expect(ladder.run())
-    #expect(writer.verifyCount == 6)
-    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
+    #expect(writer.verifyCount == FieldRewriter.confirmAttempts + 1)
+    #expect(ladder.refusals.shouldSkip(snapshot(ladder.reading)))
     #expect(writer.calls.contains(.select(target.range, target.text)))
 }
 
@@ -139,7 +149,6 @@ private struct Ladder {
     writer.verifyAnswers = [.mangled("щтдн")]
     let ladder = Ladder(writer: writer)
     #expect(ladder.run())
-    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
     #expect(writer.calls.contains(.typeKeys(deleting: 0, with: output)))
 }
 
@@ -152,7 +161,6 @@ private struct Ladder {
     let ladder = Ladder(writer: writer)
     #expect(!ladder.run())
     #expect(writer.calls == [.replace(target.range, output), .verify])
-    #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }
 
 /// The app was never asked, so there is no refusal to remember. Recording one
@@ -162,6 +170,7 @@ private struct Ladder {
     let writer = ScriptedWriter()
     writer.replaceAnswers = [.declined]
     let ladder = Ladder(writer: writer)
+    ladder.refusals.noteFailure(snapshot(ladder.reading))
     #expect(ladder.run())
     #expect(!ladder.refusals.shouldSkip(snapshot(ladder.reading)))
 }

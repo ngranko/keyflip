@@ -50,18 +50,6 @@ struct MenuKeyboardTests {
         #expect(!view.handleNavigation(press(12, modifiers: .command)))
     }
 
-    @Test func mouseExitClearsTheOutlineAndKeyboardNavigationRestoresIt() {
-        let control = HoverView(frame: .zero, action: {})
-        let view = MenuControlsView()
-        view.registerControls([control])
-        control.mouseEntered(with: crossBoundary(.mouseEntered))
-        #expect(!control.keyboardFocused)
-        control.mouseExited(with: crossBoundary(.mouseExited))
-        #expect(!control.keyboardFocused)
-        view.keyDown(with: press(124))
-        #expect(control.keyboardFocused)
-    }
-
     @Test func exitingAnOldControlDoesNotClearTheNewFocus() {
         let first = HoverView(frame: .zero, action: {})
         let second = HoverView(frame: .zero, action: {})

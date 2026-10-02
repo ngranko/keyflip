@@ -21,11 +21,7 @@ enum FieldAccess {
                 return .markedText
             }
             let role = string(element, kAXRoleAttribute as CFString) ?? "?"
-            guard supportsTextInput(role: role) else {
-                DebugLog.event("field rejected: app=\(focusedAppName()) role=\(role) reason=unsupportedRole")
-                return .noFocus
-            }
-            guard let contents = textContents(element), !AXBudget.expired else { return .unsupported }
+            guard let contents = readableContents(element, role: role), !AXBudget.expired else { return .unsupported }
             return .field(FieldSnapshot(
                 handle: .ax(element),
                 reading: FieldReading(
@@ -137,6 +133,9 @@ enum FieldAccess {
     /// An unreadable field cannot confirm success or justify another write.
     enum WriteCheck: Equatable {
         case applied
+        /// Applied, and the field selected its own completion after it — a
+        /// browser address bar autocompleting the converted text.
+        case completed
         case unchanged
         case unreadable
         case mangled(String)
@@ -162,7 +161,12 @@ enum FieldAccess {
             // check only for the browser case with no readable value.
             guard before.length > 0 else { return .applied }
             let expected = before.length - range.length + wrote
-            return value.length == expected ? .applied : .mangled(value as String)
+            if value.length == expected { return .applied }
+            let completion = contents.range
+            let completed = completion.location == range.location + wrote
+                && completion.upperBound == value.length
+                && value.length - completion.length == expected
+            return completed ? .completed : .mangled(value as String)
         }
         if slice(value, at: range.location, length: (original as NSString).length) == original {
             return .unchanged
@@ -323,6 +327,20 @@ enum FieldAccess {
         let selected = selectedString(element, range: range, value: value)
         guard selected.utf16.count <= AXBudget.textLimit else { return nil }
         return (value, range, selected)
+    }
+
+    /// Zed focuses nothing finer than its window, and Zen's rich editors can
+    /// focus a static text node. What those elements hold is not the field, so
+    /// they read as empty and leave the typing mirror as the only witness.
+    private static func readableContents(
+        _ element: AXUIElement,
+        role: String
+    ) -> (value: String, range: NSRange, selected: String)? {
+        guard supportsTextInput(role: role) else {
+            DebugLog.event("field rejected: app=\(focusedAppName()) role=\(role) reason=unsupportedRole → mirror only")
+            return ("", NSRange(location: 0, length: 0), "")
+        }
+        return textContents(element)
     }
 
     // A wrapper's descendants may contain unrelated fields or static text.

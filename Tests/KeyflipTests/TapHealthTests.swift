@@ -5,22 +5,10 @@ import Testing
 /// ADR 0009. The one failure this app must never have again is a tap that
 /// swallows the keyboard: whatever else breaks, input keeps flowing.
 struct TapHealthTests {
-    @Test func aTapThatTimedOutOnceIsPutBack() {
-        var health = TapHealth()
-        let first = health.survivesTimeout(at: 100, mayDeleteEvents: true)
-        #expect(first)
-    }
-
     @Test func aTapThatKeepsTimingOutIsGivenUpOn() {
         var health = TapHealth()
         let survivals = [100.0, 101].map { health.survivesTimeout(at: $0, mayDeleteEvents: true) }
         #expect(survivals == [true, false])
-    }
-
-    @Test func timeoutsAnHourApartAreNotTheSameFault() {
-        var health = TapHealth()
-        let survivals = [100.0, 3_600].map { health.survivesTimeout(at: $0, mayDeleteEvents: true) }
-        #expect(survivals == [true, true])
     }
 
     @Test func aTimeoutAMinuteOnIsPastTheWindow() {

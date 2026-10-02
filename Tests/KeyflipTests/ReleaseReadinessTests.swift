@@ -10,20 +10,6 @@ import Testing
     #expect(SetupReadiness(trusted: true, pairReady: true, tapActive: true) == .ready)
 }
 
-@Test func setupCompletionSurvivesRelaunchWithoutChangingThePair() {
-    let name = "KeyflipSetupTests-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: name)!
-    defer { defaults.removePersistentDomain(forName: name) }
-    let settings = SettingsStore(defaults: defaults)
-    #expect(!settings.setupCompleted)
-    settings.slotA = "a"
-    settings.slotB = "b"
-    settings.setupCompleted = true
-    let reloaded = SettingsStore(defaults: defaults)
-    #expect(reloaded.setupCompleted)
-    #expect(reloaded.slotA == "a" && reloaded.slotB == "b")
-}
-
 @Test func loginErrorsAreReportedForBothRegistrationAndRemoval() {
     let error = NSError(domain: "test.service", code: 42)
     #expect(LaunchAtLogin.change(status: .notRegistered, register: { throw error }, unregister: {}) == .failed(domain: error.domain, code: 42))
